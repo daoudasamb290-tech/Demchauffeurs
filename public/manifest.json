@@ -1,0 +1,46 @@
+{
+  "short_name": "Gaïndé VTC",
+  "name": "Gaïndé VTC Chauffeur",
+  "description": "Plateforme VTC premium pour chauffeurs au Sénégal, avec gestion des courses en temps réel, alertes sonores et tableau de bord des revenus.",
+  "id": "/?source=pwa",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#085041",
+  "theme_color": "#085041",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["transport", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Mes Nouvelles Courses",
+      "short_name": "Courses",
+      "url": "/?tab=rides",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Suivi Map GPS",
+      "short_name": "GPS Map",
+      "url": "/?tab=map",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+    }
+  ]
+}
