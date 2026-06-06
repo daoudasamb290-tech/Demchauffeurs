@@ -91,7 +91,7 @@ export default function App() {
   // Form states for creating a new departure schedule
   const [newSchedDay, setNewSchedDay] = useState('Demain');
   const [newSchedTime, setNewSchedTime] = useState('08h00');
-  const [newSchedRoute, setNewSchedRoute] = useState('Dakar (Plateau) ➔ Aéroport AIBD');
+  const [newSchedRoute, setNewSchedRoute] = useState('Dakar ➔ Tivaouane');
 
   // UI Navigation states
   const [activeTab, setActiveTab] = useState<'rides' | 'map' | 'revenues' | 'profil'>('rides');
@@ -713,7 +713,7 @@ export default function App() {
                           <Compass className="h-10 w-10 text-slate-300 mx-auto animate-spin-slow" />
                           <h4 className="text-xs font-bold text-slate-800">Aucune nouvelle demande</h4>
                           <p className="text-[11px] text-slate-500 leading-relaxed">
-                            Les réservations de Dakar apparaitront ici en temps réel dès que l'un des clients placera une commande.
+                            Les réservations inter-villes (Dakar, Thiès, Tivaouane, Touba) apparaitront ici en temps réel dès que l'un des clients placera une commande.
                           </p>
                           <div className="bg-indigo-50/50 p-2.5 rounded-2xl border border-indigo-100 text-[10px] text-indigo-700 font-medium">
                             💡 Utilisez le <strong>Simulateur Client</strong> à droite pour lancer une réservation de test !
@@ -866,11 +866,12 @@ export default function App() {
                               onChange={(e) => setNewSchedRoute(e.target.value)}
                               className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-semibold focus:outline-amber-500 text-indigo-100"
                             >
-                              <option value="Dakar (Plateau) ➔ Aéroport AIBD">Dakar (Plateau) ➔ Aéroport AIBD ✈️</option>
-                              <option value="Dakar (VDN) ➔ Saly Portudal">Dakar (VDN) ➔ Saly Portudal 🌴</option>
-                              <option value="Aéroport AIBD ➔ Dakar Plateau">Aéroport AIBD ➔ Dakar Plateau 🏙️</option>
-                              <option value="Saly Portudal ➔ Dakar Centre">Saly Portudal ➔ Dakar Centre 🛍️</option>
-                              <option value="Dakar ➔ Touba Mbacké">Dakar ➔ Touba Mbacké 🕌</option>
+                              <option value="Dakar ➔ Tivaouane">Dakar ➔ Tivaouane 🕌</option>
+                              <option value="Tivaouane ➔ Dakar">Tivaouane ➔ Dakar 🏙️</option>
+                              <option value="Thiès ➔ Dakar">Thiès ➔ Dakar 🏙️</option>
+                              <option value="Dakar ➔ Thiès">Dakar ➔ Thiès 🥜</option>
+                              <option value="Dakar ➔ Touba">Dakar ➔ Touba 🕋</option>
+                              <option value="Touba ➔ Thiès">Touba ➔ Thiès 🕌</option>
                             </select>
                           </div>
 

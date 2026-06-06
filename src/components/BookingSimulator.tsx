@@ -16,11 +16,11 @@ interface BookingSimulatorProps {
 export default function BookingSimulator({ onTriggerRide, activeRideCount }: BookingSimulatorProps) {
   const [clientName, setClientName] = useState('Abdoulaye Ndiaye');
   const [clientPhone, setClientPhone] = useState('+221 77 654 32 10');
-  const [pickup, setPickup] = useState('Sacré-Cœur 3, Boulangerie Jaune');
-  const [dropoff, setDropoff] = useState('Aéroport AIBD (Hall Départs)');
-  const [price, setPrice] = useState('15000');
-  const [distance, setDistance] = useState('48.5');
-  const [duration, setDuration] = useState('42');
+  const [pickup, setPickup] = useState('Dakar');
+  const [dropoff, setDropoff] = useState('Tivaouane');
+  const [price, setPrice] = useState('6000');
+  const [distance, setDistance] = useState('120');
+  const [duration, setDuration] = useState('85');
   const [paymentMethod, setPaymentMethod] = useState<PaymentType>('Espèces');
   const [traffic, setTraffic] = useState<'Fluide' | 'Modéré' | 'Saturé'>('Modéré');
   const [scheduledDay, setScheduledDay] = useState('Demain');
