@@ -1,0 +1,4 @@
+name = "gainde-vtc-chauffeur"
+
+[assets]
+directory = "./dist"
