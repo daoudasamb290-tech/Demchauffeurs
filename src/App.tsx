@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Ride, 
   DriverProfile, 
@@ -112,6 +112,23 @@ export default function App() {
   ]);
   const [showNotifications, setShowNotifications] = useState(false);
 
+  // Refs to prevent state capture in real-time callbacks
+  const scheduledRidesRef = useRef<Ride[]>([]);
+  const activeRidesRef = useRef<Ride[]>([]);
+  const pendingRidesRef = useRef<Ride[]>([]);
+
+  useEffect(() => {
+    scheduledRidesRef.current = scheduledRides;
+  }, [scheduledRides]);
+
+  useEffect(() => {
+    activeRidesRef.current = activeRides;
+  }, [activeRides]);
+
+  useEffect(() => {
+    pendingRidesRef.current = pendingRides;
+  }, [pendingRides]);
+
 // SUPABASE LOADING AND Continuous SYNCHRONIZATION
   const [isSupabaseLoading, setIsSupabaseLoading] = useState<boolean>(isSupabaseConfigured);
   const [showSqlInstructions, setShowSqlInstructions] = useState<boolean>(false);
@@ -128,7 +145,27 @@ export default function App() {
         setDriverSchedules(dbSchedules);
 
         const dbRides = await getRidesFromSupabase(INITIAL_RIDES_HISTORY);
-        setRideHistory(dbRides);
+        
+        // Categorize DB rides correctly based on their current status
+        const completedOrDeclined = dbRides.filter(r => (r.status as string) === 'completed' || r.status === 'declined');
+        const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup');
+        const scheduled = dbRides.filter(r => r.status === 'accepted');
+        const pending = dbRides.filter(r => r.status === 'pending');
+
+        if (completedOrDeclined.length > 0) {
+          setRideHistory(completedOrDeclined);
+        }
+        if (active.length > 0) {
+          setActiveRides(active);
+          // If there's an active ride, also focus on it
+          setActiveRide(active[0]);
+        }
+        if (scheduled.length > 0) {
+          setScheduledRides(scheduled);
+        }
+        if (pending.length > 0) {
+          setPendingRides(pending);
+        }
       } catch (err) {
         console.error("Error loading mock data from Supabase:", err);
       } finally {
@@ -188,7 +225,15 @@ export default function App() {
               ticket_number: newRow.ticket_number || undefined
             };
 
+            const isAlreadyAccepted = scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
+                                       activeRidesRef.current.some(r => r.id === mappedRide.id);
+
             if (newRow.status === 'confirmed') {
+              if (isAlreadyAccepted) {
+                // Already accepted or active, skip modal to prevent infinite feedback loop
+                return;
+              }
+
               // Assigned by dispatcher! We trigger the modal immediately.
               setAssignedRideForModal(mappedRide);
               playChime('success');
@@ -206,6 +251,7 @@ export default function App() {
             } else if (newRow.status === 'cancelled') {
               setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
               setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
+              setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
               if (activeRide?.id === mappedRide.id) {
                 setActiveRide(null);
                 setActiveTab('rides');
@@ -361,25 +407,39 @@ export default function App() {
   };
 
   const handleAcceptAssignedOfficeRide = (ride: Ride) => {
-    // 1. Add to activeRides list if not exist
-    setActiveRides(prev => {
+    // 1. Create the accepted ride object
+    const acceptedRide: Ride = {
+      ...ride,
+      status: 'accepted',
+      messages: [
+        { id: 'sys-assigned-accept', sender: 'system', text: `Course assignée d'office acceptée. Prête à être démarrée.`, time: "À l'instant" }
+      ]
+    };
+
+    // 2. Add to scheduledRides list if not exist
+    setScheduledRides(prev => {
       const exists = prev.some(r => r.id === ride.id);
       if (exists) return prev;
-      return [ride, ...prev];
+      return [acceptedRide, ...prev];
     });
 
-    // 2. Set as active focus and switch to map view
-    setActiveRide(ride);
-    setActiveTab('map');
-    setRideFilter('incoming');
+    // 3. Clear potential references from other statuses
+    setActiveRides(prev => prev.filter(r => r.id !== ride.id));
+    setPendingRides(prev => prev.filter(r => r.id !== ride.id));
 
-    // 3. Sync or log on Supabase
-    saveRideOnSupabase({ ...ride, status: 'accepted' });
-    insertRideHistoryLog(ride.id, 'confirmed', 'accepted', "Course assignée acceptée par le chauffeur.");
+    // 4. Switch view to "Bientôt" list
+    setActiveTab('rides');
+    setRideFilter('scheduled');
 
-    // 4. Close modal
+    // 5. Sync or log on Supabase
+    saveRideOnSupabase(acceptedRide);
+    insertRideHistoryLog(ride.id, 'confirmed', 'accepted', "Course assignée d'office acceptée");
+
+    // 6. Close modal & play success sound
     setAssignedRideForModal(null);
     playChime('success');
+
+    alert(`📅 Course de ${ride.clientName} acceptée avec succès !\nElle a été ajoutée dans l'onglet "Bientôt" (Réservations planifiées).\nVous pouvez la démarrer dès que vous êtes prêt.`);
   };
 
   const handleDeclineAssignedOfficeRide = (ride: Ride) => {
@@ -1486,64 +1546,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Supabase Connection Status Card */}
-                  <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm space-y-3" id="supabase-console-card">
-                    <div className="flex justify-between items-center">
-                      <h3 className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                        <Database className="h-4 w-4 text-indigo-600" /> Intégration Supabase
-                      </h3>
-                      {isSupabaseConfigured ? (
-                        <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> ACTIF
-                        </span>
-                      ) : (
-                        <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
-                          LOCAL / DECO
-                        </span>
-                      )}
-                    </div>
 
-                    <div className="text-xs space-y-2.5">
-                      {isSupabaseConfigured ? (
-                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5 text-left text-[11px] text-slate-600">
-                          <p>✅ **Connecté à votre projet Supabase** !</p>
-                          <p>Vos profils, lignes d'horaires et historique de courses de transport sont synchronisés en temps réel dans votre base de données relationnelle.</p>
-                        </div>
-                      ) : (
-                        <div className="bg-amber-50/50 p-3 rounded-2xl border border-amber-100/60 space-y-2 text-left text-[11px] text-slate-600">
-                          <p className="font-semibold text-amber-800">⚠️ Mode Démo Local actif !</p>
-                          <p>Pour lier l'application à votre propre instance Supabase, ajoutez les variables suivantes dans vos clés secrètes (**Secrets Panel**) dans AI Studio ou votre fichier d'environnement :</p>
-                          <div className="bg-slate-900 text-amber-300 font-mono text-[9px] p-2 rounded-lg space-y-1 select-all">
-                            <div>VITE_SUPABASE_URL=votre_url</div>
-                            <div>VITE_SUPABASE_ANON_KEY=votre_cle_anon</div>
-                          </div>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          setShowSqlInstructions(!showSqlInstructions);
-                          playChime('click');
-                        }}
-                        className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-xl text-[10px] flex items-center justify-center gap-1 cursor-pointer border border-slate-200"
-                      >
-                        {showSqlInstructions ? "Masquer le schéma SQL Supabase" : "Afficher le schéma SQL d'importation"}
-                      </button>
-
-                      {showSqlInstructions && (
-                        <div className="text-left space-y-1 mt-2">
-                          <p className="text-[10px] text-slate-500">Exécutez ce code SQL dans votre **SQL Editor Supabase** pour créer automatiquement les tables requises avec politiques de sécurité :</p>
-                          <textarea
-                            readOnly
-                            value={SUPABASE_SQL_INSTRUCTIONS}
-                            className="w-full h-[180px] font-mono text-[9px] bg-slate-950 text-emerald-400 p-2.5 rounded-xl border border-slate-800 focus:outline-none"
-                            onClick={(e) => (e.target as HTMLTextAreaElement).select()}
-                          />
-                          <p className="text-[8px] text-slate-400 font-medium">💡 Astuce : Cliquez à l'intérieur de la zone de texte pour tout sélectionner d'un coup.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
 
                   {/* Out trigger */}
                   <button 
