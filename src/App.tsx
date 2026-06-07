@@ -98,6 +98,7 @@ export default function App() {
   const [rideFilter, setRideFilter] = useState<'incoming' | 'scheduled' | 'history'>('incoming');
   const [isDriverOnline, setIsDriverOnline] = useState<boolean>(true);
   const [shownRideAlert, setShownRideAlert] = useState<Ride | null>(null);
+  const [assignedRideForModal, setAssignedRideForModal] = useState<Ride | null>(null);
   
   // Custom Audio Controls
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
@@ -188,19 +189,10 @@ export default function App() {
             };
 
             if (newRow.status === 'confirmed') {
-              // Assigned by dispatcher! Add to activeRides list if not exists
-              setActiveRides(prev => {
-                const exists = prev.some(r => r.id === mappedRide.id);
-                if (exists) return prev;
-
-                playChime('success');
-                speakNotification(mappedRide);
-
-                return [mappedRide, ...prev];
-              });
-
-              setActiveRide(mappedRide);
-              setActiveTab('map');
+              // Assigned by dispatcher! We trigger the modal immediately.
+              setAssignedRideForModal(mappedRide);
+              playChime('success');
+              speakNotification(mappedRide);
 
               setNotificationLog(nPrev => [
                 {
@@ -366,6 +358,50 @@ export default function App() {
     playChime('success');
 
     alert(`📅 Réservation de ${ride.clientName} acceptée avec succès !\nDépart prévu : ${ride.scheduledTime || 'à l\'avance'}.\nRetrouvez-la dans l'onglet "Bientôt".`);
+  };
+
+  const handleAcceptAssignedOfficeRide = (ride: Ride) => {
+    // 1. Add to activeRides list if not exist
+    setActiveRides(prev => {
+      const exists = prev.some(r => r.id === ride.id);
+      if (exists) return prev;
+      return [ride, ...prev];
+    });
+
+    // 2. Set as active focus and switch to map view
+    setActiveRide(ride);
+    setActiveTab('map');
+    setRideFilter('incoming');
+
+    // 3. Sync or log on Supabase
+    saveRideOnSupabase({ ...ride, status: 'accepted' });
+    insertRideHistoryLog(ride.id, 'confirmed', 'accepted', "Course assignée acceptée par le chauffeur.");
+
+    // 4. Close modal
+    setAssignedRideForModal(null);
+    playChime('success');
+  };
+
+  const handleDeclineAssignedOfficeRide = (ride: Ride) => {
+    // Set status to 'declined'
+    const declinedRide: Ride = {
+      ...ride,
+      status: 'declined'
+    };
+    
+    // Update on Supabase to release or cancel it
+    saveRideOnSupabase(declinedRide);
+    insertRideHistoryLog(ride.id, 'confirmed', 'declined', "Course assignée refusée par le chauffeur.");
+
+    // Filter out from activeRides if it somehow got in
+    setActiveRides(prev => prev.filter(r => r.id !== ride.id));
+    if (activeRide?.id === ride.id) {
+      setActiveRide(null);
+    }
+
+    // Close modal
+    setAssignedRideForModal(null);
+    playChime('decline');
   };
 
   // Launch navigation for a scheduled ride from "Bientôt" list
@@ -1744,6 +1780,104 @@ export default function App() {
           }}
           onClose={() => setIsWithdrawOpen(false)}
         />
+      )}
+
+      {/* MODAL NOTIFICATION POUR ASSIGNATION D'OFFICE */}
+      {assignedRideForModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200" id="assigned-ride-modal">
+          <div className="bg-white rounded-3xl max-w-sm w-full border border-slate-200 shadow-2xl p-6 relative overflow-hidden space-y-4 text-center">
+            
+            {/* Accent block line */}
+            <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-[#D97706] to-[#10B981]"></div>
+            
+            <div className="mx-auto bg-amber-50 h-16 w-16 rounded-full flex items-center justify-center border border-amber-200 animate-pulse mt-2">
+              <ShieldAlert className="h-8 w-8 text-amber-600" />
+            </div>
+
+            <div>
+              <span className="bg-amber-100 text-[#92400E] text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Assignation d'office 🚖
+              </span>
+              <h3 className="text-base font-extrabold text-slate-800 mt-2 font-sans">
+                Nouvelle Course Assignée !
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Le dispatcher vous a assigné d'office la course suivante :
+              </p>
+            </div>
+
+            {/* Ride Details Card */}
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-3.5 space-y-2.5 text-left text-xs">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-slate-400" />
+                  {assignedRideForModal.clientName}
+                </span>
+                {assignedRideForModal.ticket_number && (
+                  <span className="flex items-center gap-0.5 bg-emerald-100 text-emerald-800 rounded px-1.5 py-0.5 text-[9px] font-bold font-mono">
+                    <Ticket className="h-3 w-3 text-emerald-700" />
+                    TKT-{assignedRideForModal.ticket_number}
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex gap-2 items-start">
+                  <div className="mt-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100 flex-shrink-0" />
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Départ / Origine</p>
+                    <p className="font-semibold text-slate-700 leading-tight">{assignedRideForModal.pickupLocation}</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 items-start">
+                  <div className="mt-1 w-2.5 h-2.5 rounded-full bg-indigo-500 ring-4 ring-indigo-100 flex-shrink-0" />
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Arrivée / Destination</p>
+                    <p className="font-semibold text-slate-700 leading-tight">{assignedRideForModal.dropoffLocation}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-between text-[11px] font-bold text-slate-700">
+                <span>Tarif Garanti :</span>
+                <span className="text-[#085041] font-extrabold">{assignedRideForModal.priceFCFA.toLocaleString('fr-FR')} FCFA</span>
+              </div>
+            </div>
+
+            {/* Actions / 3 Buttons */}
+            <div className="flex flex-col gap-2 pt-2">
+              <a
+                href={`tel:${assignedRideForModal.clientPhone}`}
+                onClick={() => playChime('click')}
+                className="w-full bg-[#1A2B4A] hover:bg-[#111e35] text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm border border-[#1A2B4A] no-underline"
+              >
+                <PhoneCall className="h-4 w-4" />
+                Appeler le client ({assignedRideForModal.clientPhone})
+              </a>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDeclineAssignedOfficeRide(assignedRideForModal)}
+                  className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-rose-200"
+                >
+                  <X className="h-4 w-4" />
+                  Refuser
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAcceptAssignedOfficeRide(assignedRideForModal)}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm shadow-emerald-200"
+                >
+                  <CheckCircle className="h-4 w-4" />
+                  Accepter
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
       )}
 
     </div>
