@@ -116,6 +116,7 @@ export default function App() {
   const scheduledRidesRef = useRef<Ride[]>([]);
   const activeRidesRef = useRef<Ride[]>([]);
   const pendingRidesRef = useRef<Ride[]>([]);
+  const acceptedRideIdsRef = useRef<Set<string>>(new Set(UPCOMING_SCHEDULED_RIDES.map(r => r.id)));
 
   useEffect(() => {
     scheduledRidesRef.current = scheduledRides;
@@ -148,9 +149,12 @@ export default function App() {
         
         // Categorize DB rides correctly based on their current status
         const completedOrDeclined = dbRides.filter(r => (r.status as string) === 'completed' || r.status === 'declined');
-        const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup');
-        const scheduled = dbRides.filter(r => r.status === 'accepted');
+        const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && !r.isScheduled));
+        const scheduled = dbRides.filter(r => r.status === 'accepted' && r.isScheduled);
         const pending = dbRides.filter(r => r.status === 'pending');
+
+        active.forEach(r => acceptedRideIdsRef.current.add(r.id));
+        scheduled.forEach(r => acceptedRideIdsRef.current.add(r.id));
 
         if (completedOrDeclined.length > 0) {
           setRideHistory(completedOrDeclined);
@@ -225,7 +229,8 @@ export default function App() {
               ticket_number: newRow.ticket_number || undefined
             };
 
-            const isAlreadyAccepted = scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
+            const isAlreadyAccepted = acceptedRideIdsRef.current.has(mappedRide.id) ||
+                                       scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
                                        activeRidesRef.current.some(r => r.id === mappedRide.id);
 
             if (newRow.status === 'confirmed') {
@@ -241,10 +246,10 @@ export default function App() {
 
               setNotificationLog(nPrev => [
                 {
-                  id: Date.now().toString(),
-                  title: 'Course Assignée d\'Office 🚖',
-                  desc: `Course de ${mappedRide.clientName} assignée par le dispatcher : ${mappedRide.pickupLocation} ➔ ${mappedRide.dropoffLocation}`,
-                  time: "À l'instant"
+                   id: Date.now().toString(),
+                   title: 'Course Assignée d\'Office 🚖',
+                   desc: `Course de ${mappedRide.clientName} assignée par le dispatcher : ${mappedRide.pickupLocation} ➔ ${mappedRide.dropoffLocation}`,
+                   time: "À l'instant"
                 },
                 ...nPrev
               ]);
@@ -259,7 +264,7 @@ export default function App() {
               playChime('decline');
               alert(`🚨 Course annulée par le dispatcher : ${mappedRide.clientName}`);
             } else if (newRow.status === 'on_the_way') {
-              setActiveRides(prev => prev.map(r => r.id === mappedRide.id ? { ...r, status: 'accepted' as const } : r));
+              setActiveRides(prev => prev.map(r => r.id === mappedRide.id ? { ...r, status: 'arrived' as const } : r));
             } else if (newRow.status === 'in_progress') {
               setActiveRides(prev => prev.map(r => r.id === mappedRide.id ? { ...r, status: 'pickedup' as const } : r));
             } else if (newRow.status === 'completed') {
@@ -381,6 +386,7 @@ export default function App() {
   const handleAcceptRide = (ride: Ride) => {
     stopRingtoneLoop();
     setShownRideAlert(null);
+    acceptedRideIdsRef.current.add(ride.id);
     
     // Set this ride as confirmed pre-booked scheduled ride
     const acceptedRide: Ride = {
@@ -407,6 +413,7 @@ export default function App() {
   };
 
   const handleAcceptAssignedOfficeRide = (ride: Ride) => {
+    acceptedRideIdsRef.current.add(ride.id);
     // 1. Create the accepted ride object
     const acceptedRide: Ride = {
       ...ride,
@@ -472,10 +479,13 @@ export default function App() {
       return;
     }
 
+    acceptedRideIdsRef.current.add(ride.id);
+
     // Set as active ride
     const startedRide: Ride = {
       ...ride,
       status: 'accepted',
+      isScheduled: false,
       messages: [
         { id: 'sys-start-now', sender: 'system', text: "Course réservée démarrée. Récupérez le client.", time: "À l'instant" }
       ]
