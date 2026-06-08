@@ -72,7 +72,8 @@ import {
   Trash2,
   Clock,
   Database,
-  Ticket
+  Ticket,
+  RefreshCw
 } from 'lucide-react';
 
 export default function App() {
@@ -95,9 +96,9 @@ export default function App() {
     return INITIAL_DRIVER_PROFILE;
   });
   const [rideHistory, setRideHistory] = useState<Ride[]>(() => {
-    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+    const isCustom = (localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
                      localStorage.getItem('supabase_fallback_userId') && 
-                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main') || isSupabaseConfigured;
     return isCustom ? [] : INITIAL_RIDES_HISTORY;
   });
 
@@ -106,18 +107,18 @@ export default function App() {
     .filter(r => r.status === 'completed' && !r.id.startsWith('payout-') && !r.createdTime.includes("Hier"))
     .reduce((sum, r) => sum + r.priceFCFA, 0);
   const [scheduledRides, setScheduledRides] = useState<Ride[]>(() => {
-    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+    const isCustom = (localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
                      localStorage.getItem('supabase_fallback_userId') && 
-                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main') || isSupabaseConfigured;
     return isCustom ? [] : UPCOMING_SCHEDULED_RIDES;
   });
   const [pendingRides, setPendingRides] = useState<Ride[]>([]);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const [activeRides, setActiveRides] = useState<Ride[]>([]);
   const [driverSchedules, setDriverSchedules] = useState<DriverSchedule[]>(() => {
-    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+    const isCustom = (localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
                      localStorage.getItem('supabase_fallback_userId') && 
-                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main') || isSupabaseConfigured;
     return isCustom ? [] : INITIAL_DRIVER_SCHEDULES;
   });
 
@@ -224,6 +225,16 @@ export default function App() {
   useEffect(() => {
     async function loadSupabaseData() {
       if (!isSupabaseConfigured) return;
+      if (!isLoggedIn) {
+        // Reset driver states to defaults when logged out
+        setProfile(INITIAL_DRIVER_PROFILE);
+        setDriverSchedules([]);
+        setRideHistory([]);
+        setActiveRides([]);
+        setPendingRides([]);
+        setActiveRide(null);
+        return;
+      }
       setIsSupabaseLoading(true);
       try {
         const dbProfile = await getProfileFromSupabase(INITIAL_DRIVER_PROFILE);
@@ -257,6 +268,35 @@ export default function App() {
     loadSupabaseData();
   }, [isLoggedIn]);
 
+  // Handle manual/dynamic pulls of rides list from Supabase
+  const handleRefreshRidesFromSupabase = async () => {
+    if (!isSupabaseConfigured) return;
+    setIsSupabaseLoading(true);
+    try {
+      const dbRides = await getRidesFromSupabase(INITIAL_RIDES_HISTORY);
+      
+      const completedOrDeclined = dbRides.filter(r => (r.status as string) === 'completed' || r.status === 'declined');
+      const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && !r.isScheduled));
+      const scheduled = dbRides.filter(r => r.status === 'accepted' && r.isScheduled);
+      const pending = dbRides.filter(r => r.status === 'pending');
+
+      active.forEach(r => acceptedRideIdsRef.current.add(r.id));
+      scheduled.forEach(r => acceptedRideIdsRef.current.add(r.id));
+
+      setRideHistory(completedOrDeclined);
+      setActiveRides(active);
+      setActiveRide(active.length > 0 ? active[0] : null);
+      setScheduledRides(scheduled);
+      setPendingRides(pending);
+      
+      playChime('success');
+    } catch (err) {
+      console.error("Error manual refresh rides:", err);
+    } finally {
+      setIsSupabaseLoading(false);
+    }
+  };
+
   // SUPABASE REALTIME LISTENERS & STATE SYNCHRONIZATION
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return;
@@ -272,41 +312,68 @@ export default function App() {
         (payload) => {
           console.log('Realtime change received on rides:', payload);
           const newRow = payload.new as any;
+          const oldRow = payload.old as any;
+          
+          if (payload.eventType === 'DELETE') {
+            const deletedId = oldRow?.id;
+            if (deletedId) {
+              setPendingRides(prev => prev.filter(r => r.id !== deletedId));
+              setScheduledRides(prev => prev.filter(r => r.id !== deletedId));
+              setActiveRides(prev => prev.filter(r => r.id !== deletedId));
+            }
+            return;
+          }
+
           if (!newRow) return;
 
-          // Retrieve the actual logged-in user ID dynamically to support custom driver profiles
           const currentUserId = localStorage.getItem('supabase_fallback_userId') || 'driver_main';
           const isAssignedToUs = newRow.driver_id === currentUserId;
-          
-          if (isAssignedToUs) {
-            // Restore percent coords back from latitude / longitude
-            const px = newRow.pickup_coords_lng ? Math.max(0, Math.min(100, (((Number(newRow.pickup_coords_lng) + 17.53) / 0.55) * 100))) : 50;
-            const py = newRow.pickup_coords_lat ? Math.max(0, Math.min(100, (((14.77 - Number(newRow.pickup_coords_lat)) / 0.35) * 100))) : 55;
-            const dx = newRow.dropoff_coords_lng ? Math.max(0, Math.min(100, (((Number(newRow.dropoff_coords_lng) + 17.53) / 0.55) * 100))) : 60;
-            const dy = newRow.dropoff_coords_lat ? Math.max(0, Math.min(100, (((14.77 - Number(newRow.dropoff_coords_lat)) / 0.35) * 100))) : 45;
+          const isPendingPublic = (newRow.driver_id === null || newRow.driver_id === '') && mapSupabaseStatusToLocal(newRow.status) === 'pending';
 
-            const mappedRide: Ride = {
-              id: newRow.id,
-              clientName: newRow.client_name,
-              clientPhone: newRow.client_phone || '',
-              clientAvatar: newRow.client_avatar || 'CL',
-              clientRating: Number(newRow.client_rating) || 4.7,
-              pickupLocation: newRow.pickup_location,
-              pickupCoords: { x: px, y: py },
-              dropoffLocation: newRow.dropoff_location,
-              dropoffCoords: { x: dx, y: dy },
-              priceFCFA: Number(newRow.price_fcfa) || 3000,
-              distanceKM: Number(newRow.distance_km) || 5.0,
-              durationMinutes: Number(newRow.duration_minutes) || 12,
-              status: mapSupabaseStatusToLocal(newRow.status),
-              isScheduled: newRow.is_scheduled || false,
-              scheduledTime: newRow.scheduled_time || undefined,
-              paymentMethod: newRow.payment_method || 'Espèces',
-              trafficIntensity: newRow.traffic_intensity || 'Modéré',
-              createdTime: newRow.created_time || 'À l\'instant',
-              messages: [],
-              ticket_number: newRow.ticket_number || undefined
-            };
+          // Restore percent coords back from latitude / longitude
+          const px = newRow.pickup_coords_lng ? Math.max(0, Math.min(100, (((Number(newRow.pickup_coords_lng) + 17.53) / 0.55) * 100))) : 50;
+          const py = newRow.pickup_coords_lat ? Math.max(0, Math.min(100, (((14.77 - Number(newRow.pickup_coords_lat)) / 0.35) * 100))) : 55;
+          const dx = newRow.dropoff_coords_lng ? Math.max(0, Math.min(100, (((Number(newRow.dropoff_coords_lng) + 17.53) / 0.55) * 100))) : 60;
+          const dy = newRow.dropoff_coords_lat ? Math.max(0, Math.min(100, (((14.77 - Number(newRow.dropoff_coords_lat)) / 0.35) * 100))) : 45;
+
+          const mappedRide: Ride = {
+            id: newRow.id,
+            clientName: newRow.client_name,
+            clientPhone: newRow.client_phone || '',
+            clientAvatar: newRow.client_avatar || 'CL',
+            clientRating: Number(newRow.client_rating) || 4.7,
+            pickupLocation: newRow.pickup_location,
+            pickupCoords: { x: px, y: py },
+            dropoffLocation: newRow.dropoff_location,
+            dropoffCoords: { x: dx, y: dy },
+            priceFCFA: Number(newRow.price_fcfa) || 3000,
+            distanceKM: Number(newRow.distance_km) || 5.0,
+            durationMinutes: Number(newRow.duration_minutes) || 12,
+            status: mapSupabaseStatusToLocal(newRow.status),
+            isScheduled: newRow.is_scheduled || false,
+            scheduledTime: newRow.scheduled_time || undefined,
+            paymentMethod: newRow.payment_method || 'Espèces',
+            trafficIntensity: newRow.traffic_intensity || 'Modéré',
+            createdTime: newRow.created_time || 'À l\'instant',
+            messages: [],
+            ticket_number: newRow.ticket_number || undefined
+          };
+
+          if (isPendingPublic) {
+            // Add or update matching pending alert list
+            setPendingRides(prev => {
+              const exists = prev.some(r => r.id === mappedRide.id);
+              if (exists) {
+                return prev.map(r => r.id === mappedRide.id ? mappedRide : r);
+              }
+              return [mappedRide, ...prev];
+            });
+            // Ensure removed from driver groups
+            setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
+            setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
+          } else if (isAssignedToUs) {
+            // Remove from shared unassigned pending list
+            setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
 
             const isAlreadyAccepted = acceptedRideIdsRef.current.has(mappedRide.id) ||
                                        scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
@@ -334,7 +401,6 @@ export default function App() {
               ]);
             } else if (newRow.status === 'cancelled') {
               setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
-              setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
               setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
               if (activeRide?.id === mappedRide.id) {
                 setActiveRide(null);
@@ -352,7 +418,27 @@ export default function App() {
                 setActiveRide(null);
                 setActiveTab('revenues');
               }
+            } else if (newRow.status === 'accepted') {
+              // Add to schedule or active based on profile
+              if (mappedRide.isScheduled) {
+                setScheduledRides(prev => {
+                  const exists = prev.some(r => r.id === mappedRide.id);
+                  if (exists) return prev.map(r => r.id === mappedRide.id ? mappedRide : r);
+                  return [mappedRide, ...prev];
+                });
+              } else {
+                setActiveRides(prev => {
+                  const exists = prev.some(r => r.id === mappedRide.id);
+                  if (exists) return prev.map(r => r.id === mappedRide.id ? mappedRide : r);
+                  return [mappedRide, ...prev];
+                });
+              }
             }
+          } else {
+            // Assigned to someone else or modified in a way that doesn't involve us
+            setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
+            setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
+            setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
           }
         }
       )
@@ -624,8 +710,8 @@ export default function App() {
       
       setRideHistory(prev => [finalRide, ...prev]);
       
-      // Credit wallet balance by FCFA price minus 15% platform commission
-      const commission = Math.round(finalRide.priceFCFA * 0.15);
+      // Credit wallet balance by FCFA price minus a flat platform commission of 200 FCFA
+      const commission = 200;
       const earned = finalRide.priceFCFA - commission;
       
       setProfile(prev => ({
@@ -926,7 +1012,19 @@ export default function App() {
                     <div className="space-y-3 flex flex-col">
                       <div className="flex items-center justify-between">
                         <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Demandes en attente d'acceptation</h3>
-                        <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">Activité intense</span>
+                        <div className="flex items-center gap-2">
+                          {isSupabaseConfigured && (
+                            <button 
+                              onClick={handleRefreshRidesFromSupabase}
+                              disabled={isSupabaseLoading}
+                              className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-150 hover:bg-indigo-100 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw className={`h-2.5 w-2.5 ${isSupabaseLoading ? 'animate-spin' : ''}`} />
+                              Rafraîchir
+                            </button>
+                          )}
+                          <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">Activité intense</span>
+                        </div>
                       </div>
 
                       {pendingRides.length === 0 ? (
@@ -1580,10 +1678,10 @@ export default function App() {
                     <div className="bg-white rounded-3xl border border-slate-105 p-3.5 space-y-3 shadow-xs">
                       <div className="flex justify-between items-center text-xs">
                         <div>
-                          <p className="font-bold text-slate-700">Commission Gaïndé VTC (15%)</p>
+                          <p className="font-bold text-slate-700">Commission Gaïndé VTC (Flat)</p>
                           <p className="text-[9px] text-slate-400">Automatique à chaque course complétée</p>
                         </div>
-                        <span className="text-slate-500 font-mono">-15%</span>
+                        <span className="text-red-500 font-mono font-bold">-200 FCFA</span>
                       </div>
                       
                       <div className="border-t border-slate-100 pt-2.5 flex justify-between items-center text-xs">
@@ -1683,13 +1781,21 @@ export default function App() {
 
                   {/* Out trigger */}
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       setIsDriverOnline(false);
                       setActiveTab('rides');
                       playChime('decline');
                       setIsLoggedIn(false);
                       localStorage.removeItem('gainde_vtc_logged_in');
                       localStorage.removeItem('gainde_vtc_profile');
+                      localStorage.removeItem('supabase_fallback_userId');
+                      if (isSupabaseConfigured && supabase) {
+                        try {
+                          await supabase.auth.signOut();
+                        } catch (err) {
+                          console.error("Error signing out from Supabase Auth:", err);
+                        }
+                      }
                     }}
                     className="w-full bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1 pt-2 cursor-pointer border border-rose-250"
                     id="btn-logout-galsen"

@@ -373,37 +373,7 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
     if (error) throw error;
 
     if (!data || data.length === 0) {
-      if (userId !== 'driver_main') {
-        // Un nouvel utilisateur commence avec son tableau de bord propre, vierge et sécurisé
-        return [];
-      }
-      // Seed table 'rides' with existing local ride instances
-      const seedRows = fallbackRides.map(ride => ({
-        id: ride.id,
-        client_name: ride.clientName,
-        client_phone: ride.clientPhone,
-        client_avatar: ride.clientAvatar,
-        client_rating: ride.clientRating,
-        pickup_location: ride.pickupLocation,
-        pickup_coords_lat: yToLat(ride.pickupCoords.y),
-        pickup_coords_lng: xToLng(ride.pickupCoords.x),
-        dropoff_location: ride.dropoffLocation,
-        dropoff_coords_lat: yToLat(ride.dropoffCoords.y),
-        dropoff_coords_lng: xToLng(ride.dropoffCoords.x),
-        price_fcfa: ride.priceFCFA,
-        distance_km: ride.distanceKM,
-        duration_minutes: ride.durationMinutes,
-        status: mapLocalStatusToSupabase(ride.status),
-        driver_id: 'driver_main',
-        is_scheduled: ride.isScheduled,
-        scheduled_time: ride.scheduledTime || null,
-        payment_method: ride.paymentMethod,
-        traffic_intensity: ride.trafficIntensity,
-        created_time: ride.createdTime,
-        ticket_number: ride.ticket_number || null
-      }));
-      await supabase.from('rides').insert(seedRows);
-      return fallbackRides;
+      return [];
     }
 
     const mapped = data.map(row => {
@@ -437,15 +407,11 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
       };
     });
 
-    if (userId !== 'driver_main') {
-      // Pour les nouveaux conducteurs, filtrer les trajets complétés d'autres conducteurs qui auraient pu passer
-      return mapped.filter(r => {
-        // Garder si c'est en attente (disponible pour tous) ou si ça appartient précisément à l'utilisateur connecté
-        return r.status === 'pending' || (data.find(row => row.id === r.id)?.driver_id === userId);
-      });
-    }
-
-    return mapped;
+    // Filtre les trajets pour s'assurer de ne garder que les siens ou ceux disponibles pour tous (pending)
+    return mapped.filter(r => {
+      const dbRow = data.find(row => row.id === r.id);
+      return r.status === 'pending' || (dbRow?.driver_id === userId);
+    });
   } catch (err) {
     console.error("Failed to get rides from Supabase: ", err);
     return effectiveFallback;
