@@ -1162,6 +1162,13 @@ export default function App() {
                                 </div>
                               </div>
 
+                              {/* Departure Date/Time row */}
+                              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 mb-3.5">
+                                <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                                <span className="text-slate-400 font-bold text-[10px] uppercase mr-1">Départ prévu :</span>
+                                <span className="text-slate-800 font-black">{ride.scheduledTime || ride.createdTime || "Immédiat"}</span>
+                              </div>
+
                               {/* Card action footer containing three distinct possibilities */}
                               <div className="flex justify-between items-center pt-2.5 border-t border-slate-100 gap-2">
                                 <a 
@@ -1601,6 +1608,10 @@ export default function App() {
                                       <p className="text-[9px] text-slate-400 truncate font-medium mt-0.5">
                                         À dépose : {ride.dropoffLocation}
                                       </p>
+                                      <p className="text-[9px] text-slate-500 font-semibold mt-1.5 flex items-center gap-1.5 bg-slate-100 px-2 py-0.5 rounded-md w-fit">
+                                        <Clock className="h-3 w-3 text-amber-500 shrink-0" />
+                                        <span>Départ : {ride.scheduledTime || ride.createdTime || "Immédiat"}</span>
+                                      </p>
                                     </div>
                                   </div>
 
@@ -2014,6 +2025,13 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* Departure Date/Time row */}
+                    <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 mb-3.5">
+                      <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                      <span className="text-slate-400 font-bold text-[10px] uppercase mr-1">Départ prévu :</span>
+                      <span className="text-slate-800 font-black">{shownRideAlert.scheduledTime || shownRideAlert.createdTime || "Immédiat"}</span>
+                    </div>
+
                     {/* Card action footer containing three distinct possibilities */}
                     <div className="flex justify-between items-center pt-2.5 border-t border-slate-100 gap-2">
                       <a 
@@ -2143,6 +2161,16 @@ export default function App() {
               </div>
 
               <div className="space-y-2">
+                <div className="flex gap-2 items-start">
+                  <div className="mt-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-4 ring-amber-100 flex-shrink-0" />
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Date & Heure de course</p>
+                    <p className="font-semibold text-[#085041] leading-tight flex items-center gap-1">
+                      {assignedRideForModal.scheduledTime || assignedRideForModal.createdTime || "Départ immédiat"}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="flex gap-2 items-start">
                   <div className="mt-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100 flex-shrink-0" />
                   <div>
