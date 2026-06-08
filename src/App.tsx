@@ -23,6 +23,8 @@ import {
 import BookingSimulator from './components/BookingSimulator';
 import SimulatedMap from './components/SimulatedMap';
 import WithdrawModal from './components/WithdrawModal';
+import DriverLoginForm from './components/DriverLoginForm';
+import Inscription from './pages/Inscription';
 import {
   isSupabaseConfigured,
   supabase,
@@ -74,19 +76,50 @@ import {
 } from 'lucide-react';
 
 export default function App() {
+  // Authentication status
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('gainde_vtc_logged_in') === 'true';
+  });
+  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+
   // Application Data States
-  const [profile, setProfile] = useState<DriverProfile>(INITIAL_DRIVER_PROFILE);
-  const [rideHistory, setRideHistory] = useState<Ride[]>(INITIAL_RIDES_HISTORY);
+  const [profile, setProfile] = useState<DriverProfile>(() => {
+    const saved = localStorage.getItem('gainde_vtc_profile');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // Ignore
+      }
+    }
+    return INITIAL_DRIVER_PROFILE;
+  });
+  const [rideHistory, setRideHistory] = useState<Ride[]>(() => {
+    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+                     localStorage.getItem('supabase_fallback_userId') && 
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+    return isCustom ? [] : INITIAL_RIDES_HISTORY;
+  });
 
   // Dynamic sum of all completed non-payout rides for today
   const todayEarnings = rideHistory
     .filter(r => r.status === 'completed' && !r.id.startsWith('payout-') && !r.createdTime.includes("Hier"))
     .reduce((sum, r) => sum + r.priceFCFA, 0);
-  const [scheduledRides, setScheduledRides] = useState<Ride[]>(UPCOMING_SCHEDULED_RIDES);
+  const [scheduledRides, setScheduledRides] = useState<Ride[]>(() => {
+    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+                     localStorage.getItem('supabase_fallback_userId') && 
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+    return isCustom ? [] : UPCOMING_SCHEDULED_RIDES;
+  });
   const [pendingRides, setPendingRides] = useState<Ride[]>([]);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const [activeRides, setActiveRides] = useState<Ride[]>([]);
-  const [driverSchedules, setDriverSchedules] = useState<DriverSchedule[]>(INITIAL_DRIVER_SCHEDULES);
+  const [driverSchedules, setDriverSchedules] = useState<DriverSchedule[]>(() => {
+    const isCustom = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+                     localStorage.getItem('supabase_fallback_userId') && 
+                     localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+    return isCustom ? [] : INITIAL_DRIVER_SCHEDULES;
+  });
 
   // Form states for creating a new departure schedule
   const [newSchedDay, setNewSchedDay] = useState('Demain');
@@ -104,6 +137,7 @@ export default function App() {
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
   const [chattingRide, setChattingRide] = useState<Ride | null>(null);
   const [isWithdrawOpen, setIsWithdrawOpen] = useState<boolean>(false);
+  const [isMapFullscreen, setIsMapFullscreen] = useState<boolean>(false);
 
   // Senegal localization alerts list
   const [notificationLog, setNotificationLog] = useState<{id: string; title: string; desc: string; time: string}[]>([
@@ -129,6 +163,59 @@ export default function App() {
   useEffect(() => {
     pendingRidesRef.current = pendingRides;
   }, [pendingRides]);
+
+  // Synchronize state with Supabase active session on load & change
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    // Check current active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        console.log("Supabase active session verified on load:", session);
+        setIsLoggedIn(true);
+        localStorage.setItem('gainde_vtc_logged_in', 'true');
+        if (window.location.hash || window.location.search) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      }
+    });
+
+    // Handle real-time auth state updates globally
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("Supabase Auth event globally detected:", event, session);
+      if (session) {
+        setIsLoggedIn(true);
+        localStorage.setItem('gainde_vtc_logged_in', 'true');
+        if (window.location.hash || window.location.search) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setIsLoggedIn(false);
+        localStorage.removeItem('gainde_vtc_logged_in');
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // Synchronize dynamic login state across multiple open tabs in the same browser
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'gainde_vtc_logged_in') {
+        if (e.newValue === 'true') {
+          console.log("Authentication synchronized from another tab!");
+          setIsLoggedIn(true);
+        } else if (e.newValue === null || e.newValue === 'false') {
+          console.log("Sign-out synchronized from another tab.");
+          setIsLoggedIn(false);
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
 // SUPABASE LOADING AND Continuous SYNCHRONIZATION
   const [isSupabaseLoading, setIsSupabaseLoading] = useState<boolean>(isSupabaseConfigured);
@@ -156,20 +243,11 @@ export default function App() {
         active.forEach(r => acceptedRideIdsRef.current.add(r.id));
         scheduled.forEach(r => acceptedRideIdsRef.current.add(r.id));
 
-        if (completedOrDeclined.length > 0) {
-          setRideHistory(completedOrDeclined);
-        }
-        if (active.length > 0) {
-          setActiveRides(active);
-          // If there's an active ride, also focus on it
-          setActiveRide(active[0]);
-        }
-        if (scheduled.length > 0) {
-          setScheduledRides(scheduled);
-        }
-        if (pending.length > 0) {
-          setPendingRides(pending);
-        }
+        setRideHistory(completedOrDeclined);
+        setActiveRides(active);
+        setActiveRide(active.length > 0 ? active[0] : null);
+        setScheduledRides(scheduled);
+        setPendingRides(pending);
       } catch (err) {
         console.error("Error loading mock data from Supabase:", err);
       } finally {
@@ -177,7 +255,7 @@ export default function App() {
       }
     }
     loadSupabaseData();
-  }, []);
+  }, [isLoggedIn]);
 
   // SUPABASE REALTIME LISTENERS & STATE SYNCHRONIZATION
   useEffect(() => {
@@ -196,8 +274,9 @@ export default function App() {
           const newRow = payload.new as any;
           if (!newRow) return;
 
-          // If the ride is assigned to this driver 'driver_main'
-          const isAssignedToUs = newRow.driver_id === 'driver_main';
+          // Retrieve the actual logged-in user ID dynamically to support custom driver profiles
+          const currentUserId = localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+          const isAssignedToUs = newRow.driver_id === currentUserId;
           
           if (isAssignedToUs) {
             // Restore percent coords back from latitude / longitude
@@ -288,7 +367,8 @@ export default function App() {
         (payload) => {
           console.log('Realtime new notification received:', payload);
           const notif = payload.new as any;
-          if (!notif || notif.driver_id !== 'driver_main') return;
+          const currentUserId = localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+          if (!notif || notif.driver_id !== currentUserId) return;
 
           setNotificationLog(prev => [
             {
@@ -678,7 +758,40 @@ export default function App() {
 
 
 
-            {/* Custom Interactive applet notification panel */}
+            {!isLoggedIn ? (
+              <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center p-4 overflow-y-auto" id="login-container-inside-phone">
+                {authView === 'login' ? (
+                  <DriverLoginForm 
+                    onLoginSuccess={(profileData) => {
+                      setProfile(profileData);
+                      setIsLoggedIn(true);
+                      localStorage.setItem('gainde_vtc_logged_in', 'true');
+                      localStorage.setItem('gainde_vtc_profile', JSON.stringify(profileData));
+                      if (isSupabaseConfigured) {
+                        updateProfileOnSupabase(profileData);
+                      }
+                    }}
+                    onToggleView={() => setAuthView('signup')}
+                  />
+                ) : (
+                  <Inscription 
+                    onSignUpSuccess={(profileData) => {
+                      setProfile(profileData);
+                      setIsLoggedIn(true);
+                      setAuthView('login'); // reset state
+                      localStorage.setItem('gainde_vtc_logged_in', 'true');
+                      localStorage.setItem('gainde_vtc_profile', JSON.stringify(profileData));
+                      if (isSupabaseConfigured) {
+                        updateProfileOnSupabase(profileData);
+                      }
+                    }}
+                    onToggleView={() => setAuthView('login')}
+                  />
+                )}
+              </div>
+            ) : (
+              <>
+                {/* Custom Interactive applet notification panel */}
             {showNotifications && (
               <div className="absolute top-10 inset-x-0 bg-white shadow-lg border-b border-slate-100 z-50 p-4 animate-in slide-in-from-top duration-300">
                 <div className="flex items-center justify-between border-b pb-2 mb-2">
@@ -702,69 +815,71 @@ export default function App() {
             )}
 
             {/* Application Main Top Header inside the App wrapper */}
-            <div className="bg-indigo-900 text-white px-5 pb-5 pt-3 flex flex-col space-y-4 shadow" id="driver-app-topbar">
-              <div className="flex items-center justify-between">
-                
-                {/* Profile card with online indicator */}
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-[#E2B13C]/20 border-2 border-[#E2B13C]/80 flex items-center justify-center font-black text-[#E2B13C] text-sm tracking-wider">
-                    {profile.avatarInitials}
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-100 leading-tight">{profile.name}</h2>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className={`h-2 w-2 rounded-full inline-block ${isDriverOnline ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></span>
-                      <span className="text-[10px] font-semibold text-indigo-200">
-                        {isDriverOnline ? "Disponible (En ligne)" : "Hors ligne (Indisponible)"}
-                      </span>
+            {!(isMapFullscreen && activeTab === 'map') && (
+              <div className="bg-indigo-900 text-white px-5 pb-5 pt-3 flex flex-col space-y-4 shadow" id="driver-app-topbar">
+                <div className="flex items-center justify-between">
+                  
+                  {/* Profile card with online indicator */}
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-[#E2B13C]/20 border-2 border-[#E2B13C]/80 flex items-center justify-center font-black text-[#E2B13C] text-sm tracking-wider">
+                      {profile.avatarInitials}
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-100 leading-tight">{profile.name}</h2>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className={`h-2 w-2 rounded-full inline-block ${isDriverOnline ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></span>
+                        <span className="text-[10px] font-semibold text-indigo-200">
+                          {isDriverOnline ? "Disponible (En ligne)" : "Hors ligne (Indisponible)"}
+                        </span>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Notifications & Sound bells */}
+                  <div className="flex items-center gap-1.5">
+                    <button 
+                      onClick={() => { setShowNotifications(!showNotifications); playChime('click'); }}
+                      className="p-2 bg-indigo-950/40 hover:bg-slate-800/40 rounded-full border border-indigo-700/50 text-indigo-100 cursor-pointer relative"
+                      aria-label="Alerts log"
+                    >
+                      <Bell className="h-4 w-4" />
+                      <span className="absolute top-0 right-0 w-2 h-2 rounded-full bg-red-500"></span>
+                    </button>
+                  </div>
                 </div>
 
-                {/* Notifications & Sound bells */}
-                <div className="flex items-center gap-1.5">
-                  <button 
-                    onClick={() => { setShowNotifications(!showNotifications); playChime('click'); }}
-                    className="p-2 bg-indigo-950/40 hover:bg-slate-800/40 rounded-full border border-indigo-700/50 text-indigo-100 cursor-pointer relative"
-                    aria-label="Alerts log"
-                  >
-                    <Bell className="h-4 w-4" />
-                    <span className="absolute top-0 right-0 w-2 h-2 rounded-full bg-red-500"></span>
-                  </button>
+                {/* Status control box and mini balance counter */}
+                <div className="bg-indigo-950 p-2.5 rounded-2xl flex items-center justify-between border border-indigo-800/40">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-widest font-extrabold block">SOLDE COMPTE</span>
+                    <span className="text-sm font-black text-emerald-400 font-mono">{profile.walletBalanceFCFA.toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+
+                  {/* Online driver Toggle switcher */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-slate-300">Statut</span>
+                    <button
+                      onClick={() => {
+                        setIsDriverOnline(!isDriverOnline);
+                        playChime('click');
+                        if (isDriverOnline) {
+                          stopRingtoneLoop();
+                          setPendingRides([]);
+                        }
+                      }}
+                      className={`w-11 h-6 rounded-full relative transition-colors duration-305 flex items-center p-0.5 cursor-pointer ${
+                        isDriverOnline ? 'bg-emerald-500' : 'bg-red-500'
+                      }`}
+                      id="driver-online-switch"
+                    >
+                      <span className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform duration-300 ${
+                        isDriverOnline ? 'translate-x-5' : 'translate-x-0'
+                      }`}></span>
+                    </button>
+                  </div>
                 </div>
               </div>
-
-              {/* Status control box and mini balance counter */}
-              <div className="bg-indigo-950 p-2.5 rounded-2xl flex items-center justify-between border border-indigo-800/40">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 uppercase tracking-widest font-extrabold block">SOLDE COMPTE</span>
-                  <span className="text-sm font-black text-emerald-400 font-mono">{profile.walletBalanceFCFA.toLocaleString('fr-FR')} FCFA</span>
-                </div>
-
-                {/* Online driver Toggle switcher */}
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-300">Statut</span>
-                  <button
-                    onClick={() => {
-                      setIsDriverOnline(!isDriverOnline);
-                      playChime('click');
-                      if (isDriverOnline) {
-                        stopRingtoneLoop();
-                        setPendingRides([]);
-                      }
-                    }}
-                    className={`w-11 h-6 rounded-full relative transition-colors duration-305 flex items-center p-0.5 cursor-pointer ${
-                      isDriverOnline ? 'bg-emerald-500' : 'bg-red-500'
-                    }`}
-                    id="driver-online-switch"
-                  >
-                    <span className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform duration-300 ${
-                      isDriverOnline ? 'translate-x-5' : 'translate-x-0'
-                    }`}></span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            )}
 
             {/* SCREEN PORTAL VIEW BODY CELL */}
             <div className="flex-1 bg-slate-50 overflow-y-auto flex flex-col" id="device-screen-core">
@@ -1163,21 +1278,28 @@ export default function App() {
                 <div className="flex-1 flex flex-col animate-in fade-in duration-200" id="screen-map-tab">
                   
                   {/* Public transport banner indicator */}
-                  <div className="bg-[#1D9E75]/10 border-b border-[#1D9E75]/20 p-2 px-3 text-xs flex justify-between items-center shrink-0">
-                    <span className="font-bold text-[#085041] flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
-                      <Car className="h-4 w-4 text-[#1D9E75]" />
-                      🚍 Transport Collectif Public (4 Places Max)
-                    </span>
-                    <span className="font-bold bg-indigo-900 text-white text-[9px] px-2 py-0.5 rounded-full font-mono animate-pulse">
-                      {activeRides.length} / 4 SIÈGES
-                    </span>
-                  </div>
+                  {!isMapFullscreen && (
+                    <div className="bg-[#1D9E75]/10 border-b border-[#1D9E75]/20 p-2 px-3 text-xs flex justify-between items-center shrink-0">
+                      <span className="font-bold text-[#085041] flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
+                        <Car className="h-4 w-4 text-[#1D9E75]" />
+                        🚍 Transport Collectif Public (4 Places Max)
+                      </span>
+                      <span className="font-bold bg-indigo-900 text-white text-[9px] px-2 py-0.5 rounded-full font-mono animate-pulse">
+                        {activeRides.length} / 4 SIÈGES
+                      </span>
+                    </div>
+                  )}
 
                   {/* Wrapper for the map with stable heights */}
-                  <div className="h-[270px] shrink-0 relative border-b border-slate-200">
+                  <div className={`${isMapFullscreen ? 'flex-1' : 'h-[270px]'} shrink-0 relative border-b border-slate-200 transition-all duration-300`}>
                     <SimulatedMap 
                       activeRide={activeRide}
                       onUpdateRideStatus={handleUpdateRideStatus}
+                      isFullscreen={isMapFullscreen}
+                      onToggleFullscreen={() => {
+                        setIsMapFullscreen(!isMapFullscreen);
+                        playChime('click');
+                      }}
                     />
 
                     {/* Chat widget floated on the map */}
@@ -1203,7 +1325,8 @@ export default function App() {
                   </div>
 
                   {/* Interactive collective seats & passenger lists */}
-                  <div className="flex-1 overflow-y-auto bg-slate-50 p-2.5 space-y-2.5 flex flex-col">
+                  {!isMapFullscreen && (
+                    <div className="flex-1 overflow-y-auto bg-slate-50 p-2.5 space-y-2.5 flex flex-col">
                     
                     {/* Visual 4-Seat occupancy representation */}
                     <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs space-y-1.5">
@@ -1379,10 +1502,10 @@ export default function App() {
                         </div>
                       )}
                     </div>
-
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            )}
 
               {/* TAB 3: EARNING REPORTS AND WITHDRAW PAYOUT MECHANISMS */}
               {activeTab === 'revenues' && (
@@ -1564,9 +1687,12 @@ export default function App() {
                       setIsDriverOnline(false);
                       setActiveTab('rides');
                       playChime('decline');
-                      alert("Déconnexion réussie. Vous êtes hors ligne et ne recevrez plus de demandes.");
+                      setIsLoggedIn(false);
+                      localStorage.removeItem('gainde_vtc_logged_in');
+                      localStorage.removeItem('gainde_vtc_profile');
                     }}
-                    className="w-full bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1 pt-2 cursor-pointer border border-rose-200"
+                    className="w-full bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1 pt-2 cursor-pointer border border-rose-250"
+                    id="btn-logout-galsen"
                   >
                     <LogOut className="h-4 w-4" /> SE DÉCONNECTER DE L'APPLICATION
                   </button>
@@ -1577,63 +1703,65 @@ export default function App() {
             </div>
 
             {/* APP NAVIGATION FOOTER ON SMARTPHONE SCREEN FRAME */}
-            <nav className="h-[68px] bg-white border-t border-slate-200 flex items-center justify-around pb-2 shadow-inner z-45" id="galsen-app-navbar">
-              <button
-                onClick={() => { setActiveTab('rides'); playChime('click'); }}
-                className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
-                  activeTab === 'rides' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
-                }`}
-                id="navbar-tab-rides"
-              >
-                <div className="relative">
-                  <Compass className="h-5 w-5" />
-                  {pendingRides.length > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold animate-bounce">
-                      {pendingRides.length}
-                    </span>
-                  )}
-                </div>
-                <span>Courses</span>
-              </button>
+            {!(isMapFullscreen && activeTab === 'map') && (
+              <nav className="h-[68px] bg-white border-t border-slate-200 flex items-center justify-around pb-2 shadow-inner z-45" id="galsen-app-navbar">
+                <button
+                  onClick={() => { setActiveTab('rides'); playChime('click'); }}
+                  className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
+                    activeTab === 'rides' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                  id="navbar-tab-rides"
+                >
+                  <div className="relative">
+                    <Compass className="h-5 w-5" />
+                    {pendingRides.length > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold animate-bounce">
+                        {pendingRides.length}
+                      </span>
+                    )}
+                  </div>
+                  <span>Courses</span>
+                </button>
 
-              <button
-                onClick={() => { setActiveTab('map'); playChime('click'); }}
-                className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
-                  activeTab === 'map' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
-                }`}
-                id="navbar-tab-map"
-              >
-                <div className="relative">
-                  <Navigation className={`h-5 w-5 ${activeRide ? 'text-emerald-600 animate-pulse' : ''}`} />
-                  {activeRide && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full"></span>
-                  )}
-                </div>
-                <span>Carte</span>
-              </button>
+                <button
+                  onClick={() => { setActiveTab('map'); playChime('click'); }}
+                  className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
+                    activeTab === 'map' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                  id="navbar-tab-map"
+                >
+                  <div className="relative">
+                    <Navigation className={`h-5 w-5 ${activeRide ? 'text-emerald-600 animate-pulse' : ''}`} />
+                    {activeRide && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full"></span>
+                    )}
+                  </div>
+                  <span>Carte</span>
+                </button>
 
-              <button
-                onClick={() => { setActiveTab('revenues'); playChime('click'); }}
-                className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
-                  activeTab === 'revenues' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
-                }`}
-                id="navbar-tab-revenues"
-              >
-                <TrendingUp className="h-5 w-5" />
-                <span>Revenus</span>
-              </button>
+                <button
+                  onClick={() => { setActiveTab('revenues'); playChime('click'); }}
+                  className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
+                    activeTab === 'revenues' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                  id="navbar-tab-revenues"
+                >
+                  <TrendingUp className="h-5 w-5" />
+                  <span>Revenus</span>
+                </button>
 
-              <button
-                onClick={() => { setActiveTab('profil'); playChime('click'); }}
-                className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
-                  activeTab === 'profil' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
-                }`}
-                id="navbar-tab-profil"
-              >
-                <User className="h-5 w-5" />
-                <span>Profil</span>
-              </button>
-            </nav>
+                <button
+                  onClick={() => { setActiveTab('profil'); playChime('click'); }}
+                  className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-bold cursor-pointer transition-colors ${
+                    activeTab === 'profil' ? 'text-indigo-900' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                  id="navbar-tab-profil"
+                >
+                  <User className="h-5 w-5" />
+                  <span>Profil</span>
+                </button>
+              </nav>
+            )}
 
             {/* FLOATING INCOMING NOTIFICATION MODAL ALERTS */}
             {shownRideAlert && (
@@ -1740,6 +1868,8 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            )}
+              </>
             )}
 
           </div>

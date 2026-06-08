@@ -8,8 +8,8 @@ import { DriverProfile, DriverSchedule, Ride } from './types';
 
 // Read Supabase environment variables from Vite's import.meta.env safely
 const metaEnv = (import.meta as any).env || {};
-const supabaseUrl = metaEnv.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = metaEnv.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = metaEnv.VITE_SUPABASE_URL || metaEnv.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 // Detect if Supabase is configured
 export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
@@ -91,16 +91,20 @@ export async function getProfileFromSupabase(fallbackProfile: DriverProfile): Pr
   }
 
   try {
+    // Obtenir l'userId session s'il existe
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', 'driver_main')
+      .eq('id', userId)
       .single();
 
     if (error && error.code === 'PGRST116') {
       // Row doesn't exist, create it
       const newProfileRow = {
-        id: 'driver_main',
+        id: userId,
         name: fallbackProfile.name,
         rating: fallbackProfile.rating,
         trips_count: fallbackProfile.tripsCount,
@@ -148,10 +152,13 @@ export async function updateProfileOnSupabase(profile: DriverProfile): Promise<b
   if (!supabase) return false;
 
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
     const { error } = await supabase
       .from('profiles')
       .upsert({
-        id: 'driver_main',
+        id: userId,
         name: profile.name,
         rating: profile.rating,
         trips_count: profile.tripsCount,
@@ -187,6 +194,9 @@ export async function syncDriverStatusOnSupabase(
   if (!supabase) return false;
 
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
     let computedStatus: 'available' | 'on_trip' | 'offline' = 'offline';
     if (isOnline) {
       computedStatus = hasActiveRide ? 'on_trip' : 'available';
@@ -195,8 +205,8 @@ export async function syncDriverStatusOnSupabase(
     const { error } = await supabase
       .from('drivers')
       .upsert({
-        id: 'driver_main',
-        profile_id: 'driver_main',
+        id: userId,
+        profile_id: userId,
         name: profile.name,
         phone: profile.withdrawMethods.wave || '+221 77 123 45 67',
         avatar_initials: profile.avatarInitials,
@@ -229,11 +239,14 @@ export async function insertRideHistoryLog(
   if (!supabase) return false;
 
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
     const { error } = await supabase
       .from('ride_history')
       .insert({
         ride_id: rideId,
-        driver_id: 'driver_main',
+        driver_id: userId,
         old_status: mapLocalStatusToSupabase(oldStatus),
         new_status: mapLocalStatusToSupabase(newStatus),
         changed_by: 'driver',
@@ -337,17 +350,33 @@ export async function deleteScheduleOnSupabase(id: string): Promise<boolean> {
  * Sync Rides with Supabase Table 'rides'
  */
 export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[]> {
-  if (!supabase) return fallbackRides;
+  const isCustomUser = localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
+                       localStorage.getItem('supabase_fallback_userId') && 
+                       localStorage.getItem('supabase_fallback_userId') !== 'driver_main';
+  const effectiveFallback = isCustomUser ? [] : fallbackRides;
+
+  if (!supabase) return effectiveFallback;
 
   try {
-    const { data, error } = await supabase
-      .from('rides')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
+    let query = supabase.from('rides').select('*');
+    if (userId !== 'driver_main') {
+      query = query.or(`driver_id.eq.${userId},driver_id.is.null,status.eq.pending`);
+    } else {
+      query = query.or(`driver_id.eq.driver_main,driver_id.is.null,status.eq.pending`);
+    }
+    
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw error;
 
     if (!data || data.length === 0) {
+      if (userId !== 'driver_main') {
+        // Un nouvel utilisateur commence avec son tableau de bord propre, vierge et sécurisé
+        return [];
+      }
       // Seed table 'rides' with existing local ride instances
       const seedRows = fallbackRides.map(ride => ({
         id: ride.id,
@@ -377,7 +406,7 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
       return fallbackRides;
     }
 
-    return data.map(row => {
+    const mapped = data.map(row => {
       // Transform table latitude/longitude float values back into local x/y percent coords
       const px = row.pickup_coords_lng ? lngToX(Number(row.pickup_coords_lng)) : 50;
       const py = row.pickup_coords_lat ? latToY(Number(row.pickup_coords_lat)) : 55;
@@ -407,9 +436,19 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
         ticket_number: row.ticket_number || undefined
       };
     });
+
+    if (userId !== 'driver_main') {
+      // Pour les nouveaux conducteurs, filtrer les trajets complétés d'autres conducteurs qui auraient pu passer
+      return mapped.filter(r => {
+        // Garder si c'est en attente (disponible pour tous) ou si ça appartient précisément à l'utilisateur connecté
+        return r.status === 'pending' || (data.find(row => row.id === r.id)?.driver_id === userId);
+      });
+    }
+
+    return mapped;
   } catch (err) {
     console.error("Failed to get rides from Supabase: ", err);
-    return fallbackRides;
+    return effectiveFallback;
   }
 }
 
@@ -420,6 +459,9 @@ export async function saveRideOnSupabase(ride: Ride): Promise<boolean> {
   if (!supabase) return false;
 
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+
     const lat_p = yToLat(ride.pickupCoords.y);
     const lng_p = xToLng(ride.pickupCoords.x);
     const lat_d = yToLat(ride.dropoffCoords.y);
@@ -448,7 +490,7 @@ export async function saveRideOnSupabase(ride: Ride): Promise<boolean> {
         payment_method: ride.paymentMethod,
         traffic_intensity: ride.trafficIntensity,
         created_time: ride.createdTime,
-        driver_id: (ride.status === 'pending' || ride.status === 'declined') ? null : 'driver_main',
+        driver_id: (ride.status === 'pending' || ride.status === 'declined') ? null : userId,
         ticket_number: ride.ticket_number || null
       });
 

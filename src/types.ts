@@ -65,6 +65,9 @@ export interface DriverProfile {
     orangeMoney: string;
     bank: string;
   };
+  vehicleSeats?: number;
+  preferredRoute?: string;
+  hasLicense?: boolean;
 }
 
 export interface SoundPreset {

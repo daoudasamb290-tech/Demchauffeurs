@@ -6,13 +6,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Ride } from '../types';
 import { playChime } from '../data';
-import { Navigation, Compass, AlertCircle, RefreshCw, Layers } from 'lucide-react';
+import { Navigation, Compass, AlertCircle, RefreshCw, Layers, Maximize2, Minimize2 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 interface SimulatedMapProps {
   activeRide: Ride | null;
   onUpdateRideStatus: (status: Ride['status']) => void;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 // Convert simulated percentages to real coordinates in and around Dakar
@@ -48,10 +50,15 @@ function getGeoCoords(locationName: string, coords: { x: number; y: number }): [
   return [lat, lon];
 }
 
-export default function SimulatedMap({ activeRide, onUpdateRideStatus }: SimulatedMapProps) {
+export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscreen, onToggleFullscreen }: SimulatedMapProps) {
   const [progress, setProgress] = useState(0); // 0 to 100% of current segment
   const [isDriving, setIsDriving] = useState(false);
   const [trafficAlert, setTrafficAlert] = useState<string | null>(null);
+
+  // Device Geolocation state variables
+  const [realCoords, setRealCoords] = useState<[number, number] | null>(null);
+  const [useRealGPS, setUseRealGPS] = useState<boolean>(true);
+  const [gpsError, setGpsError] = useState<string | null>(null);
   
   const intervalRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -59,6 +66,87 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
   const markerDriverRef = useRef<L.Marker | null>(null);
   const markerDestinationRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+
+  // Watch current device position to set real position
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsError("Géolocalisation indisponible");
+      return;
+    }
+
+    const handleSuccess = (pos: GeolocationPosition) => {
+      setRealCoords([pos.coords.latitude, pos.coords.longitude]);
+      setGpsError(null);
+    };
+
+    const handleError = (err: GeolocationPositionError) => {
+      console.warn("Geolocation watch error:", err.message);
+      setGpsError(err.code === err.PERMISSION_DENIED ? "Accès GPS refusé" : "Erreur GPS");
+    };
+
+    // Fast initial check
+    navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
+      enableHighAccuracy: true,
+      timeout: 8000,
+    });
+
+    // Real-time track
+    const watchId = navigator.geolocation.watchPosition(handleSuccess, handleError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 10000,
+    });
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
+
+  // Helper to translate location names back to GPS markers dynamically based either on Dakar or Driver's real GPS neighborhood area
+  const getRideCoords = (locationName: string, configCoords: { x: number; y: number }): [number, number] => {
+    if (useRealGPS && realCoords) {
+      // Create beautifully spread distinct custom destinations relative to the user's real street location!
+      const name = locationName.toLowerCase();
+      let seed = 0;
+      for (let i = 0; i < name.length; i++) {
+        seed += name.charCodeAt(i);
+      }
+      // Micro relative offsets (approx 1 to 2.5 km radius)
+      const latOffset = 0.007 + ((seed % 17) / 1200);
+      const lonOffset = 0.007 + ((seed % 27) / 1200);
+      const latSign = (seed % 2 === 0) ? 1 : -1;
+      const lonSign = (seed % 3 === 0) ? 1 : -1;
+      return [
+        realCoords[0] + (latOffset * latSign),
+        realCoords[1] + (lonOffset * lonSign)
+      ];
+    }
+    // Dakar default sim coordinates
+    return getGeoCoords(locationName, configCoords);
+  };
+
+  // Trigger leaflet resize computation when fullscreen height changes
+  useEffect(() => {
+    if (mapRef.current) {
+      // Immediate resize
+      mapRef.current.invalidateSize();
+      
+      // Secondary resize at 100ms when layout transitions are starting
+      const t1 = setTimeout(() => {
+        mapRef.current?.invalidateSize();
+      }, 100);
+
+      // Third resize at 350ms to ensure final height matches container perfectly
+      const t2 = setTimeout(() => {
+        mapRef.current?.invalidateSize();
+      }, 350);
+
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [isFullscreen]);
 
   // Derived state for ETA and Distance Left to avoid state synchronization issues
   let eta = 0;
@@ -205,16 +293,19 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
       iconAnchor: [40, 26],
     });
 
-    if (activeRide) {
-      const pickup = getGeoCoords(activeRide.pickupLocation, activeRide.pickupCoords);
-      const dropoff = getGeoCoords(activeRide.dropoffLocation, activeRide.dropoffCoords);
+    const baseLat = (useRealGPS && realCoords) ? realCoords[0] : 14.7167;
+    const baseLon = (useRealGPS && realCoords) ? realCoords[1] : -17.4479;
 
-      let currentDriverLat = 14.7167;
-      let currentDriverLon = -17.4479;
-      let currentDestLat = 14.7167;
-      let currentDestLon = -17.4479;
-      const startLat = 14.7167;
-      const startLon = -17.4479;
+    if (activeRide) {
+      const pickup = getRideCoords(activeRide.pickupLocation, activeRide.pickupCoords);
+      const dropoff = getRideCoords(activeRide.dropoffLocation, activeRide.dropoffCoords);
+
+      let currentDriverLat = baseLat;
+      let currentDriverLon = baseLon;
+      let currentDestLat = baseLat;
+      let currentDestLon = baseLon;
+      const startLat = baseLat;
+      const startLon = baseLon;
 
       if (activeRide.status === 'accepted') {
         currentDriverLat = startLat + (pickup[0] - startLat) * (progress / 100);
@@ -292,11 +383,22 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
       }
 
     } else {
-      // Clean up when idling
-      if (markerDriverRef.current) {
-        markerDriverRef.current.remove();
-        markerDriverRef.current = null;
+      // Clean up when idling - still show real driver location if authorized
+      if (useRealGPS && realCoords) {
+        if (!markerDriverRef.current) {
+          markerDriverRef.current = L.marker([realCoords[0], realCoords[1]], { icon: driverIcon }).addTo(map);
+        } else {
+          markerDriverRef.current.setLatLng([realCoords[0], realCoords[1]]);
+        }
+        map.setView([realCoords[0], realCoords[1]], 14);
+      } else {
+        if (markerDriverRef.current) {
+          markerDriverRef.current.remove();
+          markerDriverRef.current = null;
+        }
+        map.setView([14.7167, -17.4479], 12);
       }
+
       if (markerDestinationRef.current) {
         markerDestinationRef.current.remove();
         markerDestinationRef.current = null;
@@ -305,9 +407,8 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
         polylineRef.current.remove();
         polylineRef.current = null;
       }
-      map.setView([14.7167, -17.4479], 12);
     }
-  }, [activeRide, progress]);
+  }, [activeRide, progress, realCoords, useRealGPS]);
 
   return (
     <div className="flex-1 min-h-[300px] relative overflow-hidden bg-slate-100 flex flex-col" id="real-leaflet-map-wrapper">
@@ -327,24 +428,89 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
                 <p className="text-[10px] text-slate-500 uppercase tracking-widest font-extrabold">
                   {activeRide.status === 'accepted' ? 'Vers Client' : 'Vers Destination'}
                 </p>
-                <h4 className="text-xs font-bold text-slate-800 truncate max-w-[170px]">
+                <h4 className="text-xs font-bold text-slate-800 truncate max-w-[150px]">
                   {activeRide.status === 'accepted' ? activeRide.pickupLocation : activeRide.dropoffLocation}
                 </h4>
               </div>
             </div>
             
-            <div className="text-right flex flex-col items-end shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Interactive GPS Toggle Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setUseRealGPS(!useRealGPS);
+                  playChime('click');
+                }}
+                className={`p-1.5 px-2 text-[9px] font-extrabold rounded-xl border transition-all flex items-center gap-1 cursor-pointer active:scale-95 ${
+                  useRealGPS && realCoords
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                }`}
+                title={useRealGPS && realCoords ? "Cliquez de nouveau pour simuler la zone Dakar" : "Cliquez pour utiliser vos vraies coordonnées GPS"}
+                id="btn-toggle-gps-active"
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${useRealGPS && realCoords ? 'bg-emerald-500 animate-pulse' : 'bg-indigo-500'}`}></span>
+                {useRealGPS && realCoords ? "GPS Réel" : "Dakar"}
+              </button>
+
               <span className="text-emerald-700 text-[10px] font-bold bg-emerald-100/80 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 animate-spin" /> {activeRide.trafficIntensity}
               </span>
+              {onToggleFullscreen && (
+                <button
+                  type="button"
+                  onClick={onToggleFullscreen}
+                  className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 p-1.5 rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center active:scale-95"
+                  title={isFullscreen ? "Réduire l'écran" : "Plein écran"}
+                  id="btn-toggle-fullscreen-navigating"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="h-4 w-4" />
+                  ) : (
+                    <Maximize2 className="h-4 w-4" />
+                  )}
+                </button>
+              )}
             </div>
           </div>
         ) : (
           <div className="glass-panel p-3 rounded-xl shadow-md border border-white/60 bg-white/90 backdrop-blur-md flex items-center justify-between" id="navigation-hud-idle">
-            <span className="text-xs text-slate-500 flex items-center gap-2">
-              <Compass className="h-4 w-4 text-slate-400 animate-spin-slow" /> En veille · En attente de course...
-            </span>
-            <span className="text-[10px] bg-slate-200 text-slate-600 font-bold px-2 py-0.5 rounded-full">Dakar, SN</span>
+            <button
+              type="button"
+              onClick={() => {
+                setUseRealGPS(!useRealGPS);
+                playChime('click');
+              }}
+              className="text-xs text-slate-700 hover:text-slate-900 flex items-center gap-2 font-bold cursor-pointer transition-colors"
+              title="Permet de basculer la carte sur vos vraies coordonnées GPS"
+              id="btn-toggle-gps-idle"
+            >
+              <Compass className={`h-4 w-4 ${useRealGPS && realCoords ? 'text-emerald-500' : 'text-slate-400 animate-spin-slow'}`} />
+              <span className="truncate max-w-[170px] text-left">
+                {useRealGPS && realCoords ? "📍 GPS Réel Actif" : "En veille · Attente de course..."}
+              </span>
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] bg-slate-200 text-slate-600 font-bold px-2 py-0.5 rounded-full">
+                {useRealGPS && realCoords ? "Ma Position" : "Dakar, SN"}
+              </span>
+              {onToggleFullscreen && (
+                <button
+                  type="button"
+                  onClick={onToggleFullscreen}
+                  className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/80 p-1.5 rounded-lg shadow-xs transition-all cursor-pointer flex items-center justify-center active:scale-95"
+                  title={isFullscreen ? "Réduire l'écran" : "Plein écran"}
+                  id="btn-toggle-fullscreen-idle"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="h-3.5 w-3.5" />
+                  ) : (
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -358,7 +524,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
       </div>
 
       {/* Map controller bottom drawer (utilizes z-[1000] to sit perfectly above Leaflet layers) */}
-      {activeRide ? (
+      {!isFullscreen && (activeRide ? (
         <div className="absolute bottom-0 inset-x-0 bg-white/95 backdrop-blur-md z-[1000] p-4 border-t border-slate-100 rounded-t-3xl shadow-2xl space-y-4 text-center" id="map-bottom-drawer">
           <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded-2xl border border-slate-100" id="eta-stats-row">
             <div className="text-center flex-1 border-r border-slate-200/60 last:border-0">
@@ -378,6 +544,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
           <div className="flex items-center gap-3">
             {activeRide.status === 'accepted' && (
               <button
+                type="button"
                 onClick={() => onUpdateRideStatus('arrived')}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 id="btn-arrive-manually"
@@ -388,6 +555,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
 
             {activeRide.status === 'arrived' && (
               <button
+                type="button"
                 onClick={() => onUpdateRideStatus('pickedup')}
                 className="flex-1 bg-[#085041] hover:bg-slate-900 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 cursor-pointer animate-pulse"
                 id="btn-pickup-client"
@@ -398,6 +566,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
 
             {activeRide.status === 'pickedup' && (
               <button
+                type="button"
                 onClick={() => onUpdateRideStatus('completed')}
                 className="flex-1 bg-slate-900 hover:bg-black text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 cursor-pointer border border-emerald-400"
                 id="btn-complete-ride-manually"
@@ -417,7 +586,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus }: Simulat
             Pour lancer et tester l'itinéraire GPS, simulez puis acceptez une course reçue en temps réel.
           </p>
         </div>
-      )}
+      ))}
     </div>
   );
 }
