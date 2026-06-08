@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gainde-vtc-v1';
+const CACHE_NAME = 'dem-driver-v1';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

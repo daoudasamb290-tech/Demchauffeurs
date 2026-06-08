@@ -155,6 +155,24 @@ export async function updateProfileOnSupabase(profile: DriverProfile): Promise<b
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
 
+    let seniorityToSave = profile.seniority;
+    try {
+      const { data: existingRow } = await supabase
+        .from('profiles')
+        .select('seniority')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (existingRow && existingRow.seniority && existingRow.seniority.includes('pwd:')) {
+        const pwdPart = existingRow.seniority.match(/\|pwd:[^|]+/);
+        if (pwdPart && !seniorityToSave.includes('pwd:')) {
+          seniorityToSave = `${seniorityToSave.split('|')[0]}${pwdPart[0]}`;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not check/merge existing profile seniority during update:", e);
+    }
+
     const { error } = await supabase
       .from('profiles')
       .upsert({
@@ -162,7 +180,7 @@ export async function updateProfileOnSupabase(profile: DriverProfile): Promise<b
         name: profile.name,
         rating: profile.rating,
         trips_count: profile.tripsCount,
-        seniority: profile.seniority,
+        seniority: seniorityToSave,
         vehicle_model: profile.vehicleModel,
         vehicle_plate: profile.vehiclePlate,
         avatar_initials: profile.avatarInitials,

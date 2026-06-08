@@ -1,6 +1,6 @@
 {
-  "short_name": "Gaïndé VTC",
-  "name": "Gaïndé VTC Chauffeur",
+  "short_name": "DEM driver",
+  "name": "DEM driver",
   "description": "Plateforme VTC premium pour chauffeurs au Sénégal, avec gestion des courses en temps réel, alertes sonores et tableau de bord des revenus.",
   "id": "/?source=pwa",
   "start_url": "/?source=pwa",

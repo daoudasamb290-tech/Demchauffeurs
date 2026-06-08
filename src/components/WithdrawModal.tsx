@@ -242,7 +242,7 @@ export default function WithdrawModal({ currentBalanceFCFA, onWithdrawSuccess, o
               </div>
 
               <div className="text-[9px] text-slate-400 text-center pt-2 border-t border-slate-200/50">
-                Gaïndé VTC Officiel • {receipt.date}
+                DEM driver Officiel • {receipt.date}
               </div>
             </div>
 

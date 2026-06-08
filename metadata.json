@@ -1,5 +1,5 @@
 {
-  "name": "Gaïndé VTC Chauffeur",
+  "name": "DEM driver",
   "description": "Plateforme VTC premium pour chauffeurs au Sénégal, avec gestion des courses en temps réel, alertes sonores et tableau de bord des revenus.",
   "requestFramePermissions": ["geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

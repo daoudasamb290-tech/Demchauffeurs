@@ -42,16 +42,18 @@ export default function Inscription({ onSignUpSuccess, onToggleView }: Inscripti
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState<number>(4);
-  const [preferredRoute, setPreferredRoute] = useState('Dakar ➔ Thiès');
+  const [preferredRoute, setPreferredRoute] = useState('Dakar ➔ Tivaouane');
   const [hasLicense, setHasLicense] = useState(false);
 
   const routePresets = [
+    'Dakar ➔ Tivaouane',
     'Dakar ➔ Thiès',
     'Dakar ➔ Mbour',
     'Dakar ➔ Touba',
     'Dakar ➔ Saint-Louis',
     'Dakar ➔ AIBD (Aéroport)',
     'Thiès ➔ Dakar',
+    'Tivaouane ➔ Dakar',
   ];
 
   const handleNextStep = (e: React.FormEvent) => {
@@ -157,7 +159,7 @@ export default function Inscription({ onSignUpSuccess, onToggleView }: Inscripti
             <Sparkles className="h-3 w-3 text-[#0a6653]" />
             <span className="text-[10px] font-extrabold text-[#085041] uppercase tracking-wider">Devenir Partenaire</span>
           </div>
-          <span className="text-[10px] font-black text-slate-400">Gaïndé VTC</span>
+          <span className="text-[10px] font-black text-slate-400">DEM driver</span>
         </div>
 
         <h2 className="text-xl font-extrabold text-[#1A2B4A] tracking-tight leading-tight">

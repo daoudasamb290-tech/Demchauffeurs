@@ -1,6 +1,18 @@
 import { supabase } from '../supabaseClient';
 
 /**
+ * Extrait les 9 derniers chiffres d'un numéro pour l'uniformiser (Sénégal)
+ */
+export function getNormalizedPhoneNumber(phone: string): string {
+  if (!phone) return '';
+  const clean = phone.replace(/[^0-9]/g, '');
+  if (clean.length >= 9) {
+    return clean.substring(clean.length - 9);
+  }
+  return clean;
+}
+
+/**
  * Convertit un numéro de téléphone en e-mail synthétique pour Supabase Auth
  */
 export function formatPhoneToEmail(phoneOrEmail: string): string {
@@ -8,8 +20,8 @@ export function formatPhoneToEmail(phoneOrEmail: string): string {
   if (phoneOrEmail.includes('@')) {
     return phoneOrEmail.trim().toLowerCase();
   }
-  // Nettoie tous les caractères non numériques
-  const clean = phoneOrEmail.replace(/[^0-9]/g, '');
+  // Uniformise à 9 chiffres pour garantir la cohérence
+  const clean = getNormalizedPhoneNumber(phoneOrEmail);
   return `${clean}@gainde.vtc`;
 }
 
@@ -87,7 +99,7 @@ export async function inscriptionLivreur(telephone: string, password: string, no
     if (signUpError) {
       console.warn("Étape A (signUp) échouée ou SMTP non configuré (", signUpError.message, "). Configuration de l'inscription via Base de Données Directe de secours...");
 
-      const cleanPhone = telephone.replace(/[^0-9]/g, '');
+      const cleanPhone = getNormalizedPhoneNumber(telephone);
       const syntheticUserId = `driver_${cleanPhone || 'dummy'}`;
 
       // Sauvegarde du mot de passe localement et configuration du fallbackId de session
@@ -145,7 +157,7 @@ export async function inscriptionLivreur(telephone: string, password: string, no
 
     const userId = data.user?.id;
     if (userId) {
-      const cleanPhone = telephone.replace(/[^0-9]/g, '');
+      const cleanPhone = getNormalizedPhoneNumber(telephone);
       localStorage.setItem('supabase_fallback_userId', userId);
       localStorage.setItem(`pwd_${cleanPhone}`, password);
 
@@ -201,7 +213,7 @@ export async function inscriptionLivreur(telephone: string, password: string, no
  */
 export async function connexionLivreur(telephone: string, motDePasse: string) {
   const email = formatPhoneToEmail(telephone);
-  const cleanPhone = telephone.replace(/[^0-9]/g, '');
+  const cleanPhone = getNormalizedPhoneNumber(telephone);
 
   if (!supabase) {
     console.warn("Supabase non configuré. Mode simulation de connexion.");
@@ -214,51 +226,109 @@ export async function connexionLivreur(telephone: string, motDePasse: string) {
     };
   }
 
-  console.log(`Tentative de connexion Supabase Auth pour ${email}...`);
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password: motDePasse
-  });
+  const emailsToTry = [email];
+  const rawClean = telephone.replace(/[^0-9]/g, '');
+  const altEmail1 = `${rawClean}@gainde.vtc`;
+  if (!emailsToTry.includes(altEmail1)) {
+    emailsToTry.push(altEmail1);
+  }
+  // Si le numéro commence par 221, essayer aussi sans 221
+  if (rawClean.startsWith('221') && rawClean.length > 3) {
+    const withoutCountry = rawClean.substring(3);
+    const altEmail2 = `${withoutCountry}@gainde.vtc`;
+    if (!emailsToTry.includes(altEmail2)) {
+      emailsToTry.push(altEmail2);
+    }
+  }
+  // Essayer d'ajouter 221 s'il n'est pas présent sur un format de 9 chiffres
+  if (!rawClean.startsWith('221') && rawClean.length === 9) {
+    const withCountry = `221${rawClean}`;
+    const altEmail3 = `${withCountry}@gainde.vtc`;
+    if (!emailsToTry.includes(altEmail3)) {
+      emailsToTry.push(altEmail3);
+    }
+  }
 
-  // Si l'authentification échoue (ex: Invalid login credentials, car l'utilisateur a été créé par base de données de secours),
+  let data: any = null;
+  let error: any = null;
+
+  for (const candidateEmail of emailsToTry) {
+    console.log(`Tentative de connexion Supabase Auth pour ${candidateEmail}...`);
+    try {
+      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+        email: candidateEmail,
+        password: motDePasse
+      });
+
+      if (!signInErr) {
+        data = signInData;
+        error = null;
+        console.log(`Connexion Supabase Auth réussie pour : ${candidateEmail}`);
+        break;
+      } else {
+        error = signInErr;
+      }
+    } catch (e: any) {
+      error = e;
+    }
+  }
+
+  // Si l'authentification échoue définitivement sur tous les mails,
   // nous interrogeons la table public.profiles pour trouver un numéro correspondant de secours !
   if (error) {
     console.warn("Connexion Auth échouée (", error.message, "). Recherche d'un profil de secours en base de données...");
 
     try {
-      // Trouver par ID synthétique
-      const syntheticId = `driver_${cleanPhone}`;
-      let { data: profileRow } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', syntheticId)
-        .maybeSingle();
+      const searchTarget = cleanPhone.length >= 9 ? cleanPhone.substring(cleanPhone.length - 9) : cleanPhone;
+      console.log(`Recherche d'un profil correspondant à la cible : ${searchTarget}`);
+      
+      let profileRow = null;
 
-      // Rechercher par wave_number si non trouvé
-      if (!profileRow) {
-        const { data: altRows } = await supabase
-          .from('profiles')
-          .select('*')
-          .or(`wave_number.eq.${telephone.trim()},wave_number.eq.${telephone}`);
-        if (altRows && altRows.length > 0) {
-          profileRow = altRows[0];
-        }
+      // Étape 1 : Récupérer tous les profils pour filtrer localement de manière extrêmement tolérante aux formats de téléphone
+      const { data: allProfiles, error: fetchErr } = await supabase
+        .from('profiles')
+        .select('*');
+
+      if (fetchErr) {
+        console.error("Erreur lors de la récupération des profils:", fetchErr.message);
+      }
+
+      if (allProfiles && allProfiles.length > 0) {
+        profileRow = allProfiles.find(p => {
+          const cleanStoredWave = (p.wave_number || '').replace(/[^0-9]/g, '');
+          const cleanStoredId = (p.id || '').replace(/[^0-9]/g, '');
+          return (
+            (cleanStoredWave.length >= searchTarget.length && cleanStoredWave.endsWith(searchTarget)) ||
+            (cleanStoredId.length >= searchTarget.length && cleanStoredId.endsWith(searchTarget)) ||
+            cleanStoredWave === searchTarget ||
+            cleanStoredId === searchTarget
+          );
+        });
       }
 
       if (profileRow) {
-        // Extraction du mot de passe de secours
+        console.log(`Profil de secours trouvé : ${profileRow.name} (ID: ${profileRow.id})`);
+        // Extraction du mot de passe de secours stocké de manière transparente dans la colonne 'seniority'
         const seniorityStr = profileRow.seniority || '';
         const pwdMark = 'pwd:';
         const pwdIndex = seniorityStr.indexOf(pwdMark);
-        let savedPwd = localStorage.getItem(`pwd_${cleanPhone}`);
+        let savedPwd = null;
 
         if (pwdIndex !== -1) {
           savedPwd = seniorityStr.substring(pwdIndex + pwdMark.length).trim();
+          // can also end with another pipe, so we clean it up
+          if (savedPwd.includes('|')) {
+            savedPwd = savedPwd.split('|')[0].trim();
+          }
+        }
+
+        if (!savedPwd) {
+          savedPwd = localStorage.getItem(`pwd_${cleanPhone}`);
         }
 
         // Si le mot de passe correspond ou en cas de bypass par défaut
         if (savedPwd === motDePasse || (savedPwd && savedPwd.includes(motDePasse)) || motDePasse === 'bypass_test_default') {
-          console.log("Validation de mot de passe réussie par base de données/localStorage!");
+          console.log("Validation de mot de passe réussie par base de données de secours !");
           
           localStorage.setItem('supabase_fallback_userId', profileRow.id);
           localStorage.setItem(`pwd_${cleanPhone}`, motDePasse);
@@ -277,7 +347,11 @@ export async function connexionLivreur(telephone: string, motDePasse: string) {
               }
             }
           };
+        } else {
+          console.warn("Mot de passe incorrect pour le profil de secours.");
         }
+      } else {
+        console.warn("Aucun profil correspondant trouvé en base de données pour la cible:", searchTarget);
       }
     } catch (dbErr: any) {
       console.error("Exception durant la connexion de secours:", dbErr);

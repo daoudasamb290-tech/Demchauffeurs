@@ -27,18 +27,20 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState<number>(4);
-  const [preferredRoute, setPreferredRoute] = useState('Dakar ➔ Thiès');
+  const [preferredRoute, setPreferredRoute] = useState('Dakar ➔ Tivaouane');
   const [hasLicense, setHasLicense] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
   const routePresets = [
+    'Dakar ➔ Tivaouane',
     'Dakar ➔ Thiès',
     'Dakar ➔ Mbour',
     'Dakar ➔ Touba',
     'Dakar ➔ Saint-Louis',
     'Dakar ➔ AIBD (Aéroport)',
     'Thiès ➔ Dakar',
+    'Tivaouane ➔ Dakar',
   ];
 
   const handleLoginDirect = async (e: React.FormEvent) => {
@@ -87,7 +89,7 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
           
           setTimeout(() => {
             onLoginSuccess({
-              name: profileCheck.name || 'Pilote Gaïndé',
+              name: profileCheck.name || 'Chauffeur DEM',
               rating: Number(profileCheck.rating) || 5.0,
               tripsCount: Number(profileCheck.trips_count) || 0,
               seniority: profileCheck.seniority || 'Partenaire',
@@ -193,7 +195,7 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
           <Car className="h-7 w-7 text-[#E2B13C]" />
         </div>
         <h1 className="text-base font-black text-slate-800 flex items-center justify-center gap-1.5 uppercase tracking-wider">
-          Gaïndé VTC Chauffeur <span className="text-[9px] bg-[#E2B13C]/20 text-[#085041] border border-[#085041]/20 px-2 py-0.5 rounded-full font-extrabold">Sécurisé</span>
+          DEM driver <span className="text-[9px] bg-[#E2B13C]/20 text-[#085041] border border-[#085041]/20 px-2 py-0.5 rounded-full font-extrabold">Sécurisé</span>
         </h1>
         <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
           Pour la sécurité de l'application, l'inscription pilote valide directement l'adresse e-mail par lien magique de connexion.
@@ -202,12 +204,7 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
 
       {/* Supabase Connection Status Banner */}
       <div className="mb-4 text-center">
-        {isSupabaseConfigured ? (
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100/60 text-[10px] font-bold">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Supabase Mail Service : Actif en ligne
-          </div>
-        ) : (
+        {isSupabaseConfigured ? null : (
           <div className="bg-amber-50 border border-amber-200/60 rounded-xl p-2.5 text-left">
             <p className="text-[10px] text-amber-850 font-bold flex items-center gap-1 leading-normal">
               <Info className="h-3.5 w-3.5 text-amber-600 shrink-0" />

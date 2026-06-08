@@ -73,7 +73,8 @@ import {
   Clock,
   Database,
   Ticket,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react';
 
 export default function App() {
@@ -146,6 +147,40 @@ export default function App() {
     { id: '2', title: 'Nouvelle Régulation', desc: 'Frais de péage Dakar-AIBD entièrement remboursés par la plateforme.', time: 'Hier' }
   ]);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  // PWA installation states and simulators
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isAppInstalled, setIsAppInstalled] = useState<boolean>(() => {
+    return localStorage.getItem('dem_driver_app_installed') === 'true' || 
+           window.matchMedia('(display-mode: standalone)').matches || 
+           (navigator as any).standalone === true;
+  });
+  const [showInstallGuide, setShowInstallGuide] = useState<boolean>(false);
+  const [installStep, setInstallStep] = useState<'idle' | 'downloading' | 'success'>('idle');
+  const [installProgress, setInstallProgress] = useState<number>(0);
+  const [selectedPlatform, setSelectedPlatform] = useState<'android' | 'ios' | 'desktop'>('android');
+
+  useEffect(() => {
+    const handleBeforePrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      console.log("PWA 'beforeinstallprompt' event details captured successfully.");
+    };
+
+    const handleInstalled = () => {
+      setIsAppInstalled(true);
+      localStorage.setItem('dem_driver_app_installed', 'true');
+      console.log("PWA installed successfully.");
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforePrompt);
+    window.addEventListener('appinstalled', handleInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforePrompt);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
 
   // Refs to prevent state capture in real-time callbacks
   const scheduledRidesRef = useRef<Ride[]>([]);
@@ -874,6 +909,24 @@ export default function App() {
                     onToggleView={() => setAuthView('login')}
                   />
                 )}
+
+                {/* Visual PWA Install Ribbon */}
+                <button
+                  onClick={() => {
+                    setShowInstallGuide(true);
+                    playChime('click');
+                  }}
+                  className="mt-3.5 w-full max-w-sm bg-white hover:bg-slate-50 text-[#085041] border border-slate-200/80 rounded-2xl py-3 px-4 flex items-center justify-between text-[11px] font-bold cursor-pointer transition-all shrink-0 shadow-xs hover:border-emerald-500/30"
+                  type="button"
+                >
+                  <span className="flex items-center gap-2 text-left">
+                    <Download className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <span>Installer DEM driver sur l’écran d’accueil</span>
+                  </span>
+                  <span className="bg-[#E2B13C]/20 text-[#085041] px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider shrink-0">
+                    PWA
+                  </span>
+                </button>
               </div>
             ) : (
               <>
@@ -923,6 +976,25 @@ export default function App() {
 
                   {/* Notifications & Sound bells */}
                   <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setShowInstallGuide(true);
+                        playChime('click');
+                      }}
+                      className={`p-2 rounded-full border cursor-pointer relative transition-all ${
+                        isAppInstalled
+                          ? 'bg-emerald-950/45 border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/40'
+                          : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105 border-emerald-500/50 text-white animate-pulse'
+                      }`}
+                      title={isAppInstalled ? "Application Installée" : "Télécharger l'Application PWA"}
+                      aria-label="Télécharger l'application"
+                    >
+                      <Download className="h-4 w-4" />
+                      {!isAppInstalled && (
+                        <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500"></span>
+                      )}
+                    </button>
+
                     <button 
                       onClick={() => { setShowNotifications(!showNotifications); playChime('click'); }}
                       className="p-2 bg-indigo-950/40 hover:bg-slate-800/40 rounded-full border border-indigo-700/50 text-indigo-100 cursor-pointer relative"
@@ -1678,7 +1750,7 @@ export default function App() {
                     <div className="bg-white rounded-3xl border border-slate-105 p-3.5 space-y-3 shadow-xs">
                       <div className="flex justify-between items-center text-xs">
                         <div>
-                          <p className="font-bold text-slate-700">Commission Gaïndé VTC (Flat)</p>
+                          <p className="font-bold text-slate-700">Commission DEM driver (Flat)</p>
                           <p className="text-[9px] text-slate-400">Automatique à chaque course complétée</p>
                         </div>
                         <span className="text-red-500 font-mono font-bold">-200 FCFA</span>
@@ -2124,6 +2196,246 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* DIRECT PWA DOWNLOAD & INSTALLATION GUIDE MODAL */}
+      {showInstallGuide && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 text-slate-800" id="pwa-install-modal">
+          <div className="bg-white rounded-3xl max-w-sm w-full border border-slate-200 shadow-2xl p-6 relative overflow-hidden flex flex-col">
+            
+            {/* Header pattern banner */}
+            <div className="absolute top-0 inset-x-0 h-2 bg-[#085041]"></div>
+            
+            {/* Close button */}
+            <button
+              onClick={() => {
+                setShowInstallGuide(false);
+                setInstallStep('idle');
+                setInstallProgress(0);
+                playChime('click');
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-full cursor-pointer transition-all"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            {installStep === 'idle' && (
+              <div className="space-y-4 animate-in fade-in zoom-in-95 duration-150">
+                <div className="text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-[#085041] mx-auto flex items-center justify-center shadow-lg mb-3 mt-2">
+                    <Car className="h-10 w-10 text-[#E2B13C]" />
+                  </div>
+                  <h3 className="text-sm font-black text-slate-850 font-sans uppercase tracking-wider">
+                    Installer DEM driver
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-normal">
+                    Accédez instantanément au service d'un simple clic depuis votre écran d’accueil sans passer par l'App Store.
+                  </p>
+                </div>
+
+                {/* Platform tabs */}
+                <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl text-[10px] font-bold">
+                  <button
+                    onClick={() => { setSelectedPlatform('android'); playChime('click'); }}
+                    className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      selectedPlatform === 'android' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    🤖 Android
+                  </button>
+                  <button
+                    onClick={() => { setSelectedPlatform('ios'); playChime('click'); }}
+                    className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      selectedPlatform === 'ios' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    🍏 iPhone/iOS
+                  </button>
+                  <button
+                    onClick={() => { setSelectedPlatform('desktop'); playChime('click'); }}
+                    className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      selectedPlatform === 'desktop' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    💻 Ordinateur
+                  </button>
+                </div>
+
+                {/* Instructions by Platform */}
+                <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-200/80 text-[11px] leading-relaxed text-slate-600 min-h-[110px] flex flex-col justify-center">
+                  {selectedPlatform === 'android' && (
+                    <ol className="list-decimal list-inside space-y-1 font-medium">
+                      <li>Ouvrez l'application dans votre navigateur <strong className="text-slate-800">Chrome</strong>.</li>
+                      <li>Appuyez sur les trois points <strong className="text-slate-800">⁝</strong> en haut à droite.</li>
+                      <li>Sélectionnez <strong className="text-[#085041]">« Installer l'application »</strong> ou <strong className="text-slate-800">« Ajouter à l'écran d'accueil »</strong>.</li>
+                    </ol>
+                  )}
+
+                  {selectedPlatform === 'ios' && (
+                    <ol className="list-decimal list-inside space-y-1 font-medium">
+                      <li>Ouvrez l'application dans <strong className="text-slate-800">Safari</strong> sur votre iPhone.</li>
+                      <li>Appuyez sur le bouton de partage <strong className="text-slate-800">Partager 📤</strong> dans la barre du bas.</li>
+                      <li>Faites défiler vers le bas et sélectionnez <strong className="text-slate-800">« Sur l'écran d'accueil » ➕</strong>.</li>
+                    </ol>
+                  )}
+
+                  {selectedPlatform === 'desktop' && (
+                    <ol className="list-decimal list-inside space-y-1 font-medium">
+                      <li>Utilisez <strong className="text-slate-800">Google Chrome</strong> ou <strong className="text-slate-800">Microsoft Edge</strong>.</li>
+                      <li>Cliquez sur l'icône <strong className="text-[#085041]">Télécharger 📥</strong> à droite dans la barre d'adresse.</li>
+                      <li>Sélectionnez <strong className="text-slate-800">Installer</strong> pour confirmer l'installation locale.</li>
+                    </ol>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col gap-2 pt-1">
+                  {deferredPrompt ? (
+                    <button
+                      onClick={() => {
+                        playChime('click');
+                        deferredPrompt.prompt();
+                        deferredPrompt.userChoice.then((choice: any) => {
+                          if (choice.outcome === 'accepted') {
+                            setIsAppInstalled(true);
+                            localStorage.setItem('dem_driver_app_installed', 'true');
+                            setDeferredPrompt(null);
+                            setShowInstallGuide(false);
+                          }
+                        });
+                      }}
+                      className="w-full bg-[#085041] hover:bg-slate-900 text-[#E2B13C] font-black text-xs uppercase tracking-wider py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-98 transition-all"
+                    >
+                      <Download className="h-4 w-4" />
+                      Installer Directement (PWA)
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        playChime('click');
+                        setInstallStep('downloading');
+                        let progress = 0;
+                        const interval = setInterval(() => {
+                          progress += 5;
+                          if (progress >= 100) {
+                            clearInterval(interval);
+                            setInstallProgress(100);
+                            setTimeout(() => {
+                              setInstallStep('success');
+                              playChime('success');
+                            }, 400);
+                          } else {
+                            setInstallProgress(progress);
+                          }
+                        }, 100);
+                      }}
+                      className="w-full bg-[#085041] hover:bg-slate-900 text-[#E2B13C] font-black text-xs uppercase tracking-wider py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-98 transition-all"
+                    >
+                      <Download className="h-4 w-4 animate-bounce" />
+                      Lancer le Téléchargement
+                    </button>
+                  )}
+                  
+                  <div className="text-center text-[9px] text-slate-400 font-bold leading-normal">
+                    * Supporte la géolocalisation et les alertes de course en temps réel au Sénégal.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {installStep === 'downloading' && (
+              <div className="space-y-6 py-6 text-center animate-in fade-in duration-200">
+                <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+                  <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                    <circle
+                      cx="48"
+                      cy="48"
+                      r="42"
+                      className="stroke-slate-100"
+                      strokeWidth="6"
+                      fill="transparent"
+                    />
+                    <circle
+                      cx="48"
+                      cy="48"
+                      r="42"
+                      className="stroke-[#085041] transition-all duration-150"
+                      strokeWidth="6"
+                      strokeDasharray={263.89}
+                      strokeDashoffset={263.89 - (263.89 * installProgress) / 100}
+                      strokeLinecap="round"
+                      fill="transparent"
+                    />
+                  </svg>
+                  <span className="text-sm font-black text-slate-800 font-mono">
+                    {installProgress}%
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <h4 className="text-xs font-black text-slate-700 uppercase tracking-widest animate-pulse">
+                    Téléchargement de l'application...
+                  </h4>
+                  <p className="text-[11px] text-slate-400 font-medium max-w-xs mx-auto">
+                    {installProgress < 30 && "Connexion au réseau sécurisé DEM..."}
+                    {installProgress >= 30 && installProgress < 65 && "Téléchargement de l'icône et du manifest PWA..."}
+                    {installProgress >= 65 && installProgress < 90 && "Création du raccourci sur l'écran d'accueil..."}
+                    {installProgress >= 90 && "Finalisation de l'installation..."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {installStep === 'success' && (
+              <div className="space-y-5 py-4 text-center animate-in zoom-in-95 duration-250">
+                <div className="mx-auto w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center border-4 border-emerald-500/10 text-emerald-650 animate-bounce">
+                  <CheckCircle className="h-10 w-10 stroke-[2.5px]" />
+                </div>
+
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black text-emerald-800 uppercase tracking-wider">
+                    Application Installée !
+                  </h3>
+                  <p className="text-[11px] text-slate-500 max-w-xs mx-auto leading-normal px-2">
+                    L'icône de raccourci de <strong className="text-slate-800">DEM driver</strong> a été ajoutée à votre écran d'accueil avec succès.
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-150 rounded-2xl p-4 flex flex-col items-center justify-center">
+                  <span className="text-[9px] text-slate-400 uppercase tracking-wider font-extrabold mb-3">
+                    Aperçu sur votre écran d'accueil
+                  </span>
+                  
+                  <div className="bg-slate-850 text-white p-3 rounded-2xl w-24 shadow-md flex flex-col items-center gap-1.5 border border-slate-700 select-none">
+                    <div className="w-11 h-11 rounded-xl bg-[#085041] flex items-center justify-center shadow-inner border border-slate-600">
+                      <Car className="h-7 w-7 text-[#E2B13C]" strokeWidth={2.5} />
+                    </div>
+                    <span className="text-[9px] font-bold tracking-tight text-slate-100 truncate w-full text-center">
+                      DEM driver
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAppInstalled(true);
+                    localStorage.setItem('dem_driver_app_installed', 'true');
+                    setShowInstallGuide(false);
+                    setInstallStep('idle');
+                    setInstallProgress(0);
+                    playChime('click');
+                  }}
+                  className="w-full bg-[#085041] hover:bg-slate-900 text-[#E2B13C] font-black text-xs uppercase tracking-wider py-3.5 rounded-xl shadow-md transition-all active:scale-98 cursor-pointer"
+                >
+                  Super, C'est parfait ! 🚀
+                </button>
+              </div>
+            )}
 
           </div>
         </div>
