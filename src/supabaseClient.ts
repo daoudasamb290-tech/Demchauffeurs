@@ -94,6 +94,7 @@ export async function getProfileFromSupabase(fallbackProfile: DriverProfile): Pr
     // Obtenir l'userId session s'il existe
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id || localStorage.getItem('supabase_fallback_userId') || 'driver_main';
+    const metadataName = session?.user?.user_metadata?.nom_complet || session?.user?.user_metadata?.name || session?.user?.user_metadata?.full_name;
 
     const { data, error } = await supabase
       .from('profiles')
@@ -103,15 +104,17 @@ export async function getProfileFromSupabase(fallbackProfile: DriverProfile): Pr
 
     if (error && error.code === 'PGRST116') {
       // Row doesn't exist, create it
+      const finalName = metadataName || fallbackProfile.name;
+      const initials = finalName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'CG';
       const newProfileRow = {
         id: userId,
-        name: fallbackProfile.name,
+        name: finalName,
         rating: fallbackProfile.rating,
         trips_count: fallbackProfile.tripsCount,
         seniority: fallbackProfile.seniority,
         vehicle_model: fallbackProfile.vehicleModel,
         vehicle_plate: fallbackProfile.vehiclePlate,
-        avatar_initials: fallbackProfile.avatarInitials,
+        avatar_initials: initials,
         wallet_balance_fcfa: fallbackProfile.walletBalanceFCFA,
         wave_number: fallbackProfile.withdrawMethods.wave,
         orange_money_number: fallbackProfile.withdrawMethods.orangeMoney,
@@ -119,19 +122,34 @@ export async function getProfileFromSupabase(fallbackProfile: DriverProfile): Pr
       };
 
       await supabase.from('profiles').insert([newProfileRow]);
-      return fallbackProfile;
+      return {
+        ...fallbackProfile,
+        name: finalName,
+        avatarInitials: initials
+      };
     } else if (error) {
       throw error;
     }
 
+    let finalName = data?.name;
+    if (!finalName || finalName === 'Mamadou Kouyaté' || finalName === 'Chauffeur Gaïndé' || finalName === 'Chauffeur DEM' || finalName === 'Gaïndé Chauffeur' || finalName === 'Chauffeur de secours' || finalName === '') {
+      if (metadataName) {
+        finalName = metadataName.trim();
+        await supabase.from('profiles').update({ name: finalName }).eq('id', userId);
+      }
+    }
+
+    const calculatedName = finalName || data.name || fallbackProfile.name;
+    const initials = calculatedName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'CG';
+
     return {
-      name: data.name,
+      name: calculatedName,
       rating: Number(data.rating),
       tripsCount: Number(data.trips_count),
       seniority: data.seniority,
       vehicleModel: data.vehicle_model,
       vehiclePlate: data.vehicle_plate,
-      avatarInitials: data.avatar_initials,
+      avatarInitials: initials,
       walletBalanceFCFA: Number(data.wallet_balance_fcfa),
       withdrawMethods: {
         wave: data.wave_number || fallbackProfile.withdrawMethods.wave,
@@ -381,9 +399,9 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
 
     let query = supabase.from('rides').select('*');
     if (userId !== 'driver_main') {
-      query = query.or(`driver_id.eq.${userId},driver_id.is.null,status.eq.pending`);
+      query = query.eq('driver_id', userId);
     } else {
-      query = query.or(`driver_id.eq.driver_main,driver_id.is.null,status.eq.pending`);
+      query = query.eq('driver_id', 'driver_main');
     }
     
     const { data, error } = await query.order('created_at', { ascending: false });
@@ -425,10 +443,10 @@ export async function getRidesFromSupabase(fallbackRides: Ride[]): Promise<Ride[
       };
     });
 
-    // Filtre les trajets pour s'assurer de ne garder que les siens ou ceux disponibles pour tous (pending)
+    // Filtre les trajets pour s'assurer de ne garder que les siens
     return mapped.filter(r => {
       const dbRow = data.find(row => row.id === r.id);
-      return r.status === 'pending' || (dbRow?.driver_id === userId);
+      return dbRow?.driver_id === userId;
     });
   } catch (err) {
     console.error("Failed to get rides from Supabase: ", err);

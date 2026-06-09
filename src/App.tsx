@@ -280,10 +280,10 @@ export default function App() {
 
         const dbRides = await getRidesFromSupabase(INITIAL_RIDES_HISTORY);
         
-        // Categorize DB rides correctly based on their current status
+        // Categorize DB rides correctly based on their current status and local storage start flag
         const completedOrDeclined = dbRides.filter(r => (r.status as string) === 'completed' || r.status === 'declined');
-        const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && !r.isScheduled));
-        const scheduled = dbRides.filter(r => r.status === 'accepted' && r.isScheduled);
+        const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && localStorage.getItem(`ride_started_${r.id}`) === 'true'));
+        const scheduled = dbRides.filter(r => r.status === 'accepted' && localStorage.getItem(`ride_started_${r.id}`) !== 'true');
         const pending = dbRides.filter(r => r.status === 'pending');
 
         active.forEach(r => acceptedRideIdsRef.current.add(r.id));
@@ -311,8 +311,8 @@ export default function App() {
       const dbRides = await getRidesFromSupabase(INITIAL_RIDES_HISTORY);
       
       const completedOrDeclined = dbRides.filter(r => (r.status as string) === 'completed' || r.status === 'declined');
-      const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && !r.isScheduled));
-      const scheduled = dbRides.filter(r => r.status === 'accepted' && r.isScheduled);
+      const active = dbRides.filter(r => r.status === 'arrived' || r.status === 'pickedup' || (r.status === 'accepted' && localStorage.getItem(`ride_started_${r.id}`) === 'true'));
+      const scheduled = dbRides.filter(r => r.status === 'accepted' && localStorage.getItem(`ride_started_${r.id}`) !== 'true');
       const pending = dbRides.filter(r => r.status === 'pending');
 
       active.forEach(r => acceptedRideIdsRef.current.add(r.id));
@@ -363,7 +363,17 @@ export default function App() {
 
           const currentUserId = localStorage.getItem('supabase_fallback_userId') || 'driver_main';
           const isAssignedToUs = newRow.driver_id === currentUserId;
-          const isPendingPublic = (newRow.driver_id === null || newRow.driver_id === '') && mapSupabaseStatusToLocal(newRow.status) === 'pending';
+
+          if (!isAssignedToUs) {
+            // Course non assignée ou assignée à un autre chauffeur : invisible pour nous
+            setPendingRides(prev => prev.filter(r => r.id !== newRow.id));
+            setScheduledRides(prev => prev.filter(r => r.id !== newRow.id));
+            setActiveRides(prev => prev.filter(r => r.id !== newRow.id));
+            if (activeRide?.id === newRow.id) {
+              setActiveRide(null);
+            }
+            return;
+          }
 
           // Restore percent coords back from latitude / longitude
           const px = newRow.pickup_coords_lng ? Math.max(0, Math.min(100, (((Number(newRow.pickup_coords_lng) + 17.53) / 0.55) * 100))) : 50;
@@ -394,25 +404,9 @@ export default function App() {
             ticket_number: newRow.ticket_number || undefined
           };
 
-          if (isPendingPublic) {
-            // Add or update matching pending alert list
-            setPendingRides(prev => {
-              const exists = prev.some(r => r.id === mappedRide.id);
-              if (exists) {
-                return prev.map(r => r.id === mappedRide.id ? mappedRide : r);
-              }
-              return [mappedRide, ...prev];
-            });
-            // Ensure removed from driver groups
-            setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
-            setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
-          } else if (isAssignedToUs) {
-            // Remove from shared unassigned pending list
-            setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
-
-            const isAlreadyAccepted = acceptedRideIdsRef.current.has(mappedRide.id) ||
-                                       scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
-                                       activeRidesRef.current.some(r => r.id === mappedRide.id);
+          const isAlreadyAccepted = acceptedRideIdsRef.current.has(mappedRide.id) ||
+                                     scheduledRidesRef.current.some(r => r.id === mappedRide.id) || 
+                                     activeRidesRef.current.some(r => r.id === mappedRide.id);
 
             if (newRow.status === 'confirmed') {
               if (isAlreadyAccepted) {
@@ -469,12 +463,6 @@ export default function App() {
                 });
               }
             }
-          } else {
-            // Assigned to someone else or modified in a way that doesn't involve us
-            setPendingRides(prev => prev.filter(r => r.id !== mappedRide.id));
-            setScheduledRides(prev => prev.filter(r => r.id !== mappedRide.id));
-            setActiveRides(prev => prev.filter(r => r.id !== mappedRide.id));
-          }
         }
       )
       .subscribe();
@@ -568,6 +556,7 @@ export default function App() {
 
   // Turn off the ringing
   const handleDeclineRide = (rideId: string) => {
+    localStorage.removeItem(`ride_started_${rideId}`);
     const origRide = pendingRides.find(r => r.id === rideId);
     setPendingRides(prev => prev.filter(r => r.id !== rideId));
     if (shownRideAlert?.id === rideId) {
@@ -651,6 +640,7 @@ export default function App() {
   };
 
   const handleDeclineAssignedOfficeRide = (ride: Ride) => {
+    localStorage.removeItem(`ride_started_${ride.id}`);
     // Set status to 'declined'
     const declinedRide: Ride = {
       ...ride,
@@ -681,6 +671,9 @@ export default function App() {
     }
 
     acceptedRideIdsRef.current.add(ride.id);
+
+    // Marquer la course comme démarrée pour qu'elle le reste même après rechargement
+    localStorage.setItem(`ride_started_${ride.id}`, 'true');
 
     // Set as active ride
     const startedRide: Ride = {
@@ -740,6 +733,9 @@ export default function App() {
     const oldStatus = targetRide.status;
 
     if (nextStatus === 'completed') {
+      // Nettoyage de l'état de démarrage de la course
+      localStorage.removeItem(`ride_started_${rideId}`);
+
       // Complete the trip, credit the wallet!
       const finalRide = { ...targetRide, status: 'completed' as const };
       
