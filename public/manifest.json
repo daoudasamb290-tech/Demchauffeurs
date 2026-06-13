@@ -16,16 +16,16 @@
       "purpose": "any"
     },
     {
-      "src": "/icon.svg",
-      "type": "image/svg+xml",
+      "src": "/icon.png",
+      "type": "image/png",
       "sizes": "192x192",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg",
-      "type": "image/svg+xml",
+      "src": "/icon.png",
+      "type": "image/png",
       "sizes": "512x512",
-      "purpose": "maskable"
+      "purpose": "any maskable"
     }
   ],
   "categories": ["transport", "productivity"],
@@ -34,13 +34,13 @@
       "name": "Mes Nouvelles Courses",
       "short_name": "Courses",
       "url": "/?tab=rides",
-      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+      "icons": [{ "src": "/icon.png", "type": "image/png", "sizes": "192x192" }]
     },
     {
       "name": "Suivi Map GPS",
       "short_name": "GPS Map",
       "url": "/?tab=map",
-      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+      "icons": [{ "src": "/icon.png", "type": "image/png", "sizes": "192x192" }]
     }
   ]
 }
