@@ -61,6 +61,10 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
 
     setIsLoading(true);
 
+    const cleanPhone = telephone.replace(/[^0-9]/g, '');
+    const normalized = cleanPhone.length >= 9 ? cleanPhone.substring(cleanPhone.length - 9) : cleanPhone;
+    const savedLocalStr = localStorage.getItem(`gainde_vtc_profile_phone_${normalized}`);
+
     try {
       if (isSupabaseConfigured && supabase && !usingSimulation) {
         console.log(`Connecting driver via Phone: ${telephone}`);
@@ -87,28 +91,69 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
           playChime('success');
           setSuccessMessage('Connexion réussie ! Chargement de votre profil...');
           
+          let loadedSeats = 4;
+          let loadedRoute = 'Dakar ➔ Tivaouane';
+          let loadedLicense = true;
+          let loadedName = profileCheck.name || 'Chauffeur DEM';
+          let loadedVehicleModel = profileCheck.vehicle_model || 'Non spécifié';
+          let loadedVehiclePlate = profileCheck.vehicle_plate || 'Non spécifié';
+
+          if (savedLocalStr) {
+            try {
+              const savedLocal = JSON.parse(savedLocalStr);
+              loadedSeats = savedLocal.vehicleSeats || 4;
+              loadedRoute = savedLocal.preferredRoute || 'Dakar ➔ Tivaouane';
+              loadedLicense = savedLocal.hasLicense !== undefined ? savedLocal.hasLicense : true;
+              if (loadedName === 'Chauffeur DEM' && savedLocal.name) {
+                loadedName = savedLocal.name;
+              }
+              if (loadedVehicleModel === 'Non spécifié' && savedLocal.vehicleModel) {
+                loadedVehicleModel = savedLocal.vehicleModel;
+              }
+              if (loadedVehiclePlate === 'Non spécifié' && savedLocal.vehiclePlate) {
+                loadedVehiclePlate = savedLocal.vehiclePlate;
+              }
+            } catch (e) {}
+          }
+
+          const fullProfileData = {
+            name: loadedName,
+            rating: Number(profileCheck.rating) || 5.0,
+            tripsCount: Number(profileCheck.trips_count) || 0,
+            seniority: profileCheck.seniority || 'Partenaire',
+            vehicleModel: loadedVehicleModel,
+            vehiclePlate: loadedVehiclePlate,
+            avatarInitials: profileCheck.avatar_initials || 'PI',
+            walletBalanceFCFA: Number(profileCheck.wallet_balance_fcfa) || 0,
+            withdrawMethods: {
+              wave: profileCheck.wave_number || telephone.trim(),
+              orangeMoney: profileCheck.orange_money_number || '',
+              bank: profileCheck.bank_iban || ''
+            },
+            vehicleSeats: loadedSeats,
+            preferredRoute: loadedRoute,
+            hasLicense: loadedLicense
+          };
+
+          // Save copy of credentials & specs locally
+          localStorage.setItem(`gainde_vtc_profile_phone_${normalized}`, JSON.stringify(fullProfileData));
+
           setTimeout(() => {
-            onLoginSuccess({
-              name: profileCheck.name || 'Chauffeur DEM',
-              rating: Number(profileCheck.rating) || 5.0,
-              tripsCount: Number(profileCheck.trips_count) || 0,
-              seniority: profileCheck.seniority || 'Partenaire',
-              vehicleModel: profileCheck.vehicle_model || 'Non spécifié',
-              vehiclePlate: profileCheck.vehicle_plate || 'Non spécifié',
-              avatarInitials: profileCheck.avatar_initials || 'PI',
-              walletBalanceFCFA: Number(profileCheck.wallet_balance_fcfa) || 0,
-              withdrawMethods: {
-                wave: profileCheck.wave_number || telephone.trim(),
-                orangeMoney: profileCheck.orange_money_number || '',
-                bank: profileCheck.bank_iban || ''
-              },
-              vehicleSeats: 4,
-              preferredRoute: 'Dakar ➔ Thiès',
-              hasLicense: true
-            });
+            onLoginSuccess(fullProfileData);
           }, 1500);
         } else {
-          // Premier login mais détails véhicule non configurés
+          // Premier login mais détails véhicule non configurés - prefill with local memory if found
+          if (savedLocalStr) {
+            try {
+              const savedLocal = JSON.parse(savedLocalStr);
+              setName(savedLocal.name || '');
+              setVehicleModel(savedLocal.vehicleModel || '');
+              setVehiclePlate(savedLocal.vehiclePlate || '');
+              setVehicleSeats(savedLocal.vehicleSeats || 4);
+              setPreferredRoute(savedLocal.preferredRoute || 'Dakar ➔ Tivaouane');
+              setHasLicense(savedLocal.hasLicense || false);
+            } catch (e) {}
+          }
           setStep('VEHICLE_ONBOARDING');
           setSuccessMessage('Première connexion réussie ! Complétez les infos de votre véhicule.');
           playChime('success');
@@ -116,10 +161,22 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
       } else {
         // Mode Simulation locale
         playChime('success');
-        setSuccessMessage('[Simulation] Connexion réussie ! En route vers la configuration.');
-        setTimeout(() => {
-          setStep('VEHICLE_ONBOARDING');
-        }, 1200);
+        if (savedLocalStr) {
+          setSuccessMessage('Connexion réussie ! Récupération de votre profil enregistré...');
+          try {
+            const savedLocal = JSON.parse(savedLocalStr);
+            setTimeout(() => {
+              onLoginSuccess(savedLocal);
+            }, 1200);
+          } catch (e) {
+            setStep('VEHICLE_ONBOARDING');
+          }
+        } else {
+          setSuccessMessage('[Simulation] Connexion réussie ! En route vers la configuration.');
+          setTimeout(() => {
+            setStep('VEHICLE_ONBOARDING');
+          }, 1200);
+        }
       }
     } catch (err: any) {
       console.error("Login verification failed:", err);
@@ -166,7 +223,10 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
 
     playChime('success');
 
-    onLoginSuccess({
+    const cleanPhone = telephone.replace(/[^0-9]/g, '');
+    const normalized = cleanPhone.length >= 9 ? cleanPhone.substring(cleanPhone.length - 9) : cleanPhone;
+
+    const fullProfile = {
       name: name.trim(),
       rating: 4.95,
       tripsCount: 0,
@@ -183,7 +243,12 @@ export default function DriverLoginForm({ onLoginSuccess, onToggleView }: Driver
       vehicleSeats,
       preferredRoute,
       hasLicense
-    });
+    };
+
+    // Safe persistent cache for simulation
+    localStorage.setItem(`gainde_vtc_profile_phone_${normalized}`, JSON.stringify(fullProfile));
+
+    onLoginSuccess(fullProfile);
   };
 
   return (

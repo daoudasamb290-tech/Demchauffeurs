@@ -26,7 +26,10 @@ export const INITIAL_DRIVER_PROFILE: DriverProfile = {
     wave: "77 564 89 21",
     orangeMoney: "78 123 45 67",
     bank: "SN012 04512 0001485236 41"
-  }
+  },
+  vehicleSeats: 4,
+  preferredRoute: "Dakar ➔ Tivaouane",
+  hasLicense: true
 };
 
 // Initial list of trips (simulating pre-existing history)

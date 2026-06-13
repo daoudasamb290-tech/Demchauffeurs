@@ -124,7 +124,7 @@ export default function Inscription({ onSignUpSuccess, onToggleView }: Inscripti
           tripsCount: 0,
           seniority: 'Nouveau Partenaire',
           vehicleModel: vehicleModel.trim(),
-          vehiclePlate: vehiclePlate.trim(),
+          vehiclePlate: vehiclePlate.trim().toUpperCase(),
           avatarInitials: initials,
           walletBalanceFCFA: 0,
           withdrawMethods: {
@@ -136,6 +136,10 @@ export default function Inscription({ onSignUpSuccess, onToggleView }: Inscripti
           preferredRoute,
           hasLicense
         };
+
+        const cleanPhone = telephone.replace(/[^0-9]/g, '');
+        const normalized = cleanPhone.length >= 9 ? cleanPhone.substring(cleanPhone.length - 9) : cleanPhone;
+        localStorage.setItem(`gainde_vtc_profile_phone_${normalized}`, JSON.stringify(newProfile));
 
         onSignUpSuccess(newProfile);
       }, 2500);

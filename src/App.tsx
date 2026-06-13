@@ -77,6 +77,27 @@ import {
   Download
 } from 'lucide-react';
 
+const formatScheduleDay = (dayStr: string) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) {
+    try {
+      const date = new Date(dayStr);
+      const formatted = date.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+      return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    } catch (e) {
+      return dayStr;
+    }
+  }
+  return dayStr;
+};
+
+const getTodayDateString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export default function App() {
   // Authentication status
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
@@ -124,9 +145,55 @@ export default function App() {
   });
 
   // Form states for creating a new departure schedule
-  const [newSchedDay, setNewSchedDay] = useState('Demain');
+  const [newSchedDay, setNewSchedDay] = useState(getTodayDateString());
   const [newSchedTime, setNewSchedTime] = useState('08h00');
   const [newSchedRoute, setNewSchedRoute] = useState('Dakar ➔ Tivaouane');
+
+  // Profile Vehicle editing states
+  const [isEditingVehicle, setIsEditingVehicle] = useState(false);
+  const [editVehicleModel, setEditVehicleModel] = useState('');
+  const [editVehiclePlate, setEditVehiclePlate] = useState('');
+  const [editVehicleSeats, setEditVehicleSeats] = useState(4);
+  const [editPreferredRoute, setEditPreferredRoute] = useState('Dakar ➔ Tivaouane');
+
+  const handleStartEditingVehicle = () => {
+    setEditVehicleModel(profile.vehicleModel || '');
+    setEditVehiclePlate(profile.vehiclePlate || '');
+    setEditVehicleSeats(profile.vehicleSeats || 4);
+    setEditPreferredRoute(profile.preferredRoute || 'Dakar ➔ Tivaouane');
+    setIsEditingVehicle(true);
+    playChime('click');
+  };
+
+  const handleSaveVehicleInfo = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editVehicleModel.trim()) {
+      alert("La marque et le modèle ne peuvent pas être vides.");
+      return;
+    }
+    if (!editVehiclePlate.trim()) {
+      alert("La plaque d'immatriculation ne peut pas être vide.");
+      return;
+    }
+
+    setProfile(prev => {
+      const updated = {
+        ...prev,
+        vehicleModel: editVehicleModel.trim(),
+        vehiclePlate: editVehiclePlate.trim().toUpperCase(),
+        vehicleSeats: editVehicleSeats,
+        preferredRoute: editPreferredRoute
+      };
+      localStorage.setItem('gainde_vtc_profile', JSON.stringify(updated));
+      if (isSupabaseConfigured) {
+        updateProfileOnSupabase(updated);
+      }
+      return updated;
+    });
+
+    setIsEditingVehicle(false);
+    playChime('success');
+  };
 
   // UI Navigation states
   const [activeTab, setActiveTab] = useState<'rides' | 'map' | 'revenues' | 'profil'>('rides');
@@ -272,8 +339,39 @@ export default function App() {
       }
       setIsSupabaseLoading(true);
       try {
-        const dbProfile = await getProfileFromSupabase(INITIAL_DRIVER_PROFILE);
-        setProfile(dbProfile);
+        const saved = localStorage.getItem('gainde_vtc_profile');
+        let localProfileObj = INITIAL_DRIVER_PROFILE;
+        if (saved) {
+          try {
+            localProfileObj = JSON.parse(saved);
+          } catch(e) {}
+        }
+        const dbProfile = await getProfileFromSupabase(localProfileObj);
+        
+        // Safely merge profile details, making sure we don't overwrite valid newly filled info with placeholder defaults
+        const nameVal = (dbProfile.name && dbProfile.name !== 'Chauffeur DEM' && dbProfile.name !== 'Mamadou Kouyaté') 
+          ? dbProfile.name 
+          : (localProfileObj.name && localProfileObj.name !== 'Mamadou Kouyaté' ? localProfileObj.name : dbProfile.name);
+          
+        const mModel = (dbProfile.vehicleModel && dbProfile.vehicleModel !== 'Non spécifié' && dbProfile.vehicleModel !== 'Toyota Corolla (Premium Noir)')
+          ? dbProfile.vehicleModel
+          : (localProfileObj.vehicleModel && localProfileObj.vehicleModel !== 'Toyota Corolla (Premium Noir)' ? localProfileObj.vehicleModel : dbProfile.vehicleModel);
+          
+        const mPlate = (dbProfile.vehiclePlate && dbProfile.vehiclePlate !== 'Non spécifié' && dbProfile.vehiclePlate !== 'DK-4521-A')
+          ? dbProfile.vehiclePlate
+          : (localProfileObj.vehiclePlate && localProfileObj.vehiclePlate !== 'DK-4521-A' ? localProfileObj.vehiclePlate : dbProfile.vehiclePlate);
+
+        const mergedProfile = {
+          ...localProfileObj,
+          ...dbProfile,
+          name: nameVal,
+          vehicleModel: mModel,
+          vehiclePlate: mPlate,
+          vehicleSeats: dbProfile.vehicleSeats || localProfileObj.vehicleSeats || 4,
+          preferredRoute: dbProfile.preferredRoute || localProfileObj.preferredRoute || "Dakar ➔ Tivaouane",
+          hasLicense: dbProfile.hasLicense !== undefined ? dbProfile.hasLicense : (localProfileObj.hasLicense !== undefined ? localProfileObj.hasLicense : true),
+        };
+        setProfile(mergedProfile);
 
         const dbSchedules = await getSchedulesFromSupabase(INITIAL_DRIVER_SCHEDULES);
         setDriverSchedules(dbSchedules);
@@ -511,11 +609,30 @@ export default function App() {
     syncDriverStatusOnSupabase(isDriverOnline, hasActive, profile);
   }, [isDriverOnline, activeRides.length, profile, isSupabaseLoading]);
 
-  // Synchronize profile changes to Supabase
+  // Synchronize profile changes to Supabase and safe local phone persistence
   useEffect(() => {
-    if (isSupabaseLoading) return;
-    updateProfileOnSupabase(profile);
-  }, [profile, isSupabaseLoading]);
+    // CRITICAL: Never synchronize or overwrite local and remote storage if user is logged out
+    if (!isLoggedIn || isSupabaseLoading) return;
+
+    // Avoid overwriting actual profile data with default values on dynamic resets
+    const isDefaultProfile = profile.name === INITIAL_DRIVER_PROFILE.name && 
+                            profile.vehiclePlate === INITIAL_DRIVER_PROFILE.vehiclePlate &&
+                            profile.vehicleModel === INITIAL_DRIVER_PROFILE.vehicleModel;
+
+    localStorage.setItem('gainde_vtc_profile', JSON.stringify(profile));
+    
+    if (profile.withdrawMethods?.wave) {
+      const cleanPhone = profile.withdrawMethods.wave.replace(/[^0-9]/g, '');
+      const normalized = cleanPhone.length >= 9 ? cleanPhone.substring(cleanPhone.length - 9) : cleanPhone;
+      if (normalized && normalized !== INITIAL_DRIVER_PROFILE.withdrawMethods.wave.replace(/[^0-9]/g, '')) {
+        localStorage.setItem(`gainde_vtc_profile_phone_${normalized}`, JSON.stringify(profile));
+      }
+    }
+
+    if (!isDefaultProfile) {
+      updateProfileOnSupabase(profile);
+    }
+  }, [profile, isSupabaseLoading, isLoggedIn]);
 
   // Synchronize schedules to Supabase
   useEffect(() => {
@@ -709,7 +826,7 @@ export default function App() {
     };
     setDriverSchedules(prev => [newSchedule, ...prev]);
     playChime('success');
-    alert(`📅 Votre disponibilité de départ sous forme planifiée a été enregistrée : ${newSchedDay} à ${newSchedTime}.`);
+    alert(`📅 Votre disponibilité de départ sous forme planifiée a été enregistrée : ${formatScheduleDay(newSchedDay)} à ${newSchedTime}.`);
   };
 
   const handleToggleSchedule = (id: string) => {
@@ -1224,32 +1341,35 @@ export default function App() {
                         <form onSubmit={handleAddSchedule} className="bg-indigo-900/40 p-3 rounded-2xl border border-indigo-700/60 space-y-2.5 text-slate-800">
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div>
-                              <label className="block text-[9px] font-extrabold text-indigo-200 uppercase mb-1">Jour</label>
-                              <select
-                                value={newSchedDay}
+                              <label className="block text-[9px] font-extrabold text-indigo-200 uppercase mb-1">Jour de départ</label>
+                              <input
+                                type="date"
+                                value={newSchedDay || getTodayDateString()}
+                                min={getTodayDateString()}
                                 onChange={(e) => setNewSchedDay(e.target.value)}
-                                className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-semibold focus:outline-amber-500 text-indigo-100"
-                              >
-                                <option value="Tous les jours">Tous les jours 📅</option>
-                                <option value="Demain">Demain 🌅</option>
-                                <option value="Lundi prochain">Lundi prochain 📅</option>
-                                <option value="Mardi prochain">Mardi prochain 📅</option>
-                                <option value="Mercredi prochain">Mercredi prochain 📅</option>
-                                <option value="Jeudi prochain">Jeudi prochain 📅</option>
-                                <option value="Vendredi spécial">Vendredi spécial 🕌</option>
-                                <option value="Week-end">Week-end 🌴</option>
-                              </select>
+                                className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-bold focus:outline-amber-500 text-white cursor-pointer"
+                              />
                             </div>
                             
                             <div>
                               <label className="block text-[9px] font-extrabold text-indigo-200 uppercase mb-1">Heure de départ</label>
-                              <input
-                                type="text"
+                              <select
                                 value={newSchedTime}
                                 onChange={(e) => setNewSchedTime(e.target.value)}
-                                placeholder="08h30"
-                                className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-bold focus:outline-amber-500 text-white"
-                              />
+                                className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-bold focus:outline-amber-500 text-white cursor-pointer"
+                              >
+                                {Array.from({ length: 24 * 4 }).map((_, index) => {
+                                  const totalMinutes = index * 15;
+                                  const hours = Math.floor(totalMinutes / 60);
+                                  const minutes = totalMinutes % 60;
+                                  const timeStr = `${String(hours).padStart(2, '0')}h${String(minutes).padStart(2, '0')}`;
+                                  return (
+                                    <option key={timeStr} value={timeStr} className="bg-indigo-950 text-white">
+                                      {timeStr}
+                                    </option>
+                                  );
+                                })}
+                              </select>
                             </div>
                           </div>
 
@@ -1260,12 +1380,12 @@ export default function App() {
                               onChange={(e) => setNewSchedRoute(e.target.value)}
                               className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-semibold focus:outline-amber-500 text-indigo-100"
                             >
-                              <option value="Dakar ➔ Tivaouane">Dakar ➔ Tivaouane 🕌</option>
-                              <option value="Tivaouane ➔ Dakar">Tivaouane ➔ Dakar 🏙️</option>
-                              <option value="Thiès ➔ Dakar">Thiès ➔ Dakar 🏙️</option>
-                              <option value="Dakar ➔ Thiès">Dakar ➔ Thiès 🥜</option>
-                              <option value="Dakar ➔ Touba">Dakar ➔ Touba 🕋</option>
-                              <option value="Touba ➔ Thiès">Touba ➔ Thiès 🕌</option>
+                              <option value="Dakar ➔ Tivaouane" className="bg-indigo-950 text-white">Dakar ➔ Tivaouane 🕌</option>
+                              <option value="Tivaouane ➔ Dakar" className="bg-indigo-950 text-white">Tivaouane ➔ Dakar 🏙️</option>
+                              <option value="Thiès ➔ Dakar" className="bg-indigo-950 text-white">Thiès ➔ Dakar 🏙️</option>
+                              <option value="Dakar ➔ Thiès" className="bg-indigo-950 text-white">Dakar ➔ Thiès 🥜</option>
+                              <option value="Dakar ➔ Touba" className="bg-indigo-950 text-white">Dakar ➔ Touba 🕋</option>
+                              <option value="Touba ➔ Thiès" className="bg-indigo-950 text-white">Touba ➔ Thiès 🕌</option>
                             </select>
                           </div>
 
@@ -1279,12 +1399,12 @@ export default function App() {
                         </form>
 
                         {/* List of custom driver schedules */}
-                        <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                        <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1 text-slate-800">
                           {driverSchedules.map(sched => (
-                            <div key={sched.id} className="bg-indigo-950/50 p-2.5 rounded-xl border border-indigo-800/80 flex items-center justify-between text-xs">
+                            <div key={sched.id} className="bg-indigo-950/50 p-2.5 rounded-xl border border-indigo-800/80 flex items-center justify-between text-xs text-white">
                               <div className="text-left">
                                 <p className="font-bold text-amber-400 text-xs">
-                                  {sched.day} · {sched.time}
+                                  {formatScheduleDay(sched.day)} · {sched.time}
                                 </p>
                                 <p className="text-[10px] text-indigo-200 mt-0.5 truncate max-w-[200px]">
                                   {sched.route}
@@ -1765,8 +1885,8 @@ export default function App() {
                       
                       <div className="border-t border-slate-100 pt-2.5 flex justify-between items-center text-xs">
                         <div>
-                          <p className="font-bold text-slate-700">Assistance technique gratuite</p>
-                          <p className="text-[9px] text-slate-400">Assuré par notre centre technique à Dakar</p>
+                          <p className="font-bold text-slate-707">Assistance technique gratuite</p>
+                          <p className="text-[9px] text-slate-405">Assuré par notre centre technique à Dakar</p>
                         </div>
                         <span className="text-emerald-600 font-bold">Gratuit</span>
                       </div>
@@ -1782,26 +1902,109 @@ export default function App() {
                   
                   {/* Detailed registration profile */}
                   <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm space-y-3">
-                    <h3 className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">Informations du Véhicule</h3>
-                    
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between border-b pb-1.5">
-                        <span className="text-slate-500">Marque & Modèle :</span>
-                        <span className="font-bold text-slate-800">{profile.vehicleModel}</span>
-                      </div>
-                      <div className="flex justify-between border-b pb-1.5">
-                        <span className="text-slate-500">Plaque d'Immatriculation :</span>
-                        <span className="font-mono font-black text-indigo-900 bg-indigo-50 px-2 rounded">{profile.vehiclePlate}</span>
-                      </div>
-                      <div className="flex justify-between border-b pb-1.5">
-                        <span className="text-slate-500">Ancienneté Profil :</span>
-                        <span className="font-bold text-slate-800">{profile.seniority}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Prestations Assurées :</span>
-                        <span className="text-emerald-600 font-bold">Standard, Aéroport, Saly</span>
-                      </div>
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-[11px] font-extrabold text-[#085041] uppercase tracking-widest">Informations du Véhicule</h3>
+                      {!isEditingVehicle ? (
+                        <button
+                          onClick={handleStartEditingVehicle}
+                          className="text-[10px] font-extrabold text-indigo-700 hover:text-indigo-900 border border-indigo-200 hover:border-indigo-300 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                        >
+                          Modifier ✏️
+                        </button>
+                      ) : null}
                     </div>
+                    
+                    {isEditingVehicle ? (
+                      <form onSubmit={handleSaveVehicleInfo} className="space-y-3.5 text-xs text-left" id="form-edit-vehicle-profile">
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-slate-505 uppercase tracking-widest mb-1 font-sans">Marque & Modèle</label>
+                          <input
+                            type="text"
+                            value={editVehicleModel}
+                            onChange={(e) => setEditVehicleModel(e.target.value)}
+                            className="w-full text-xs font-semibold p-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#085041] focus:outline-hidden text-slate-800"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-slate-505 uppercase tracking-widest mb-1 font-sans">Plaque d'Immatriculation</label>
+                          <input
+                            type="text"
+                            value={editVehiclePlate}
+                            onChange={(e) => setEditVehiclePlate(e.target.value)}
+                            className="w-full text-xs font-mono font-bold p-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#085041] focus:outline-hidden text-slate-800"
+                            required
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[9px] font-extrabold text-slate-505 uppercase tracking-widest mb-1 font-sans text-left">Capacité</label>
+                            <select
+                              value={editVehicleSeats}
+                              onChange={(e) => setEditVehicleSeats(Number(e.target.value))}
+                              className="w-full text-xs font-bold p-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:outline-hidden text-slate-800 cursor-pointer"
+                            >
+                              {[2, 3, 4, 5, 6, 7, 8].map(s => (
+                                <option key={s} value={s}>{s} places</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-extrabold text-slate-505 uppercase tracking-widest mb-1 font-sans text-left">Trajet Habituel</label>
+                            <select
+                              value={editPreferredRoute}
+                              onChange={(e) => setEditPreferredRoute(e.target.value)}
+                              className="w-full text-xs font-semibold p-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:outline-hidden text-slate-800 cursor-pointer"
+                            >
+                              <option value="Dakar ➔ Tivaouane">Dakar ➔ Tivaouane</option>
+                              <option value="Tivaouane ➔ Dakar">Tivaouane ➔ Dakar</option>
+                              <option value="Thiès ➔ Dakar">Thiès ➔ Dakar</option>
+                              <option value="Dakar ➔ Thiès">Dakar ➔ Thiès</option>
+                              <option value="Dakar ➔ Touba">Dakar ➔ Touba</option>
+                              <option value="Touba ➔ Thiès">Touba ➔ Thiès</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingVehicle(false); playChime('click'); }}
+                            className="flex-1 text-slate-500 hover:bg-slate-50 border border-slate-200 font-bold py-2 rounded-xl text-xs transition-colors cursor-pointer"
+                          >
+                            Annuler
+                          </button>
+                          <button
+                            type="submit"
+                            className="flex-1 bg-[#085041] hover:bg-[#063b30] text-[#E2B13C] font-black py-2 rounded-xl text-xs transition-colors cursor-pointer"
+                          >
+                            Enregistrer
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between border-b pb-1.5">
+                          <span className="text-slate-500">Marque & Modèle :</span>
+                          <span className="font-bold text-slate-800">{profile.vehicleModel}</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-1.5">
+                          <span className="text-slate-500">Plaque d'Immatriculation :</span>
+                          <span className="font-mono font-black text-indigo-900 bg-indigo-50 px-2 rounded">{profile.vehiclePlate}</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-1.5">
+                          <span className="text-slate-500">Capacité du véhicule :</span>
+                          <span className="font-bold text-slate-800">{profile.vehicleSeats || 4} places</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-1.5">
+                          <span className="text-slate-500">Trajet de Prédilection :</span>
+                          <span className="font-bold text-slate-800">{profile.preferredRoute || "Dakar ➔ Tivaouane"}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Permis de Conduire :</span>
+                          <span className="font-bold text-emerald-600 flex items-center gap-1">Certifié Valide ✅</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Senegal administration drivers credentials status checker */}
@@ -1813,7 +2016,6 @@ export default function App() {
                     <div className="space-y-2.5">
                       {[
                         { title: 'Permis de Conduire national', desc: 'Validité : Décembre 2028', status: 'SÉCURISÉ ✅' },
-                        { title: 'Certificat d\'Aptitude professionnelle', desc: 'Agréé par le Ministère des Transports', status: 'SÉCURISÉ ✅' },
                         { title: 'Carte d\'identité CEDEAO', desc: 'Numéro d\'enregistrement vérifié', status: 'VÉRIFIÉ ✅' },
                         { title: 'Assistance Tiers & Assurance auto', desc: 'AXA Sénégal • Expire dans 8 mois', status: 'VALIDE ✅' }
                       ].map((doc, i) => (

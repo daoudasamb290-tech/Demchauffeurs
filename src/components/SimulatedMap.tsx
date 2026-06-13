@@ -50,9 +50,20 @@ function getGeoCoords(locationName: string, coords: { x: number; y: number }): [
   return [lat, lon];
 }
 
+// Haversine formula to compute actual distance in KM between two Earth coordinates
+function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's Radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscreen, onToggleFullscreen }: SimulatedMapProps) {
-  const [progress, setProgress] = useState(0); // 0 to 100% of current segment
-  const [isDriving, setIsDriving] = useState(false);
   const [trafficAlert, setTrafficAlert] = useState<string | null>(null);
 
   // Device Geolocation state variables
@@ -60,7 +71,6 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
   const [useRealGPS, setUseRealGPS] = useState<boolean>(true);
   const [gpsError, setGpsError] = useState<string | null>(null);
   
-  const intervalRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerDriverRef = useRef<L.Marker | null>(null);
@@ -149,19 +159,24 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
   }, [isFullscreen]);
 
   // Derived state for ETA and Distance Left to avoid state synchronization issues
+  const baseLat = (useRealGPS && realCoords) ? realCoords[0] : 14.7167;
+  const baseLon = (useRealGPS && realCoords) ? realCoords[1] : -17.4479;
+
   let eta = 0;
   let distanceLeft = 0;
   if (activeRide) {
-    const ratio = (100 - progress) / 100;
+    const pickup = getRideCoords(activeRide.pickupLocation, activeRide.pickupCoords);
+    const dropoff = getRideCoords(activeRide.dropoffLocation, activeRide.dropoffCoords);
+
     if (activeRide.status === 'accepted') {
-      const totalPickupDuration = Math.round(activeRide.durationMinutes * 0.3) || 5;
-      const totalPickupDist = parseFloat((activeRide.distanceKM * 0.3).toFixed(1)) || 1.5;
-      eta = Math.max(1, Math.round(totalPickupDuration * ratio));
-      distanceLeft = parseFloat(Math.max(0.1, totalPickupDist * ratio).toFixed(1));
+      distanceLeft = getDistanceKm(baseLat, baseLon, pickup[0], pickup[1]);
     } else if (activeRide.status === 'pickedup' || activeRide.status === 'arrived') {
-      eta = Math.max(1, Math.round(activeRide.durationMinutes * ratio));
-      distanceLeft = parseFloat(Math.max(0.1, activeRide.distanceKM * ratio).toFixed(1));
+      distanceLeft = getDistanceKm(baseLat, baseLon, dropoff[0], dropoff[1]);
     }
+
+    // Dynamic scale formatting
+    distanceLeft = parseFloat(Math.max(0.1, distanceLeft).toFixed(1));
+    eta = Math.max(1, Math.round(distanceLeft * 2.4)); // ~25 km/h urban average
   }
 
   // Initialize Map
@@ -193,18 +208,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
   // Update simulator settings on activeRide change
   useEffect(() => {
     if (!activeRide) {
-      setIsDriving(false);
-      setProgress(0);
       return;
-    }
-
-    setProgress(0);
-    if (activeRide.status === 'accepted') {
-      setIsDriving(true);
-    } else if (activeRide.status === 'pickedup') {
-      setIsDriving(true);
-    } else {
-      setIsDriving(false);
     }
 
     const trafficMessages = [
@@ -219,48 +223,6 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
     setTrafficAlert(randomAlert);
 
   }, [activeRide?.id, activeRide?.status]);
-
-  // Handle simulation progression loop
-  useEffect(() => {
-    if (!isDriving || !activeRide) return;
-
-    intervalRef.current = setInterval(() => {
-      setProgress((prev) => {
-        const step = activeRide.status === 'accepted' ? 4 : 2; // Speed up driving simulation
-        const next = prev + step;
-
-        if (next >= 100) {
-          clearInterval(intervalRef.current);
-          return 100;
-        }
-
-        return next;
-      });
-    }, 1200);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isDriving, activeRide?.id, activeRide?.status]);
-
-  // Handle completion / arrival when progress reaches 100
-  useEffect(() => {
-    if (progress >= 100 && isDriving && activeRide) {
-      setIsDriving(false);
-      
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-
-      if (activeRide.status === 'accepted') {
-        onUpdateRideStatus('arrived');
-        playChime('arrive-horn');
-      } else if (activeRide.status === 'pickedup') {
-        // Ne pas terminer la course automatiquement. Le chauffeur doit cliquer sur "Terminer la Course" manuellement pour valider.
-        playChime('success');
-      }
-    }
-  }, [progress, isDriving, activeRide?.id, activeRide?.status, onUpdateRideStatus]);
 
   // Sync Leaflet Layers with Simulated Driving State
   useEffect(() => {
@@ -300,21 +262,15 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
       const pickup = getRideCoords(activeRide.pickupLocation, activeRide.pickupCoords);
       const dropoff = getRideCoords(activeRide.dropoffLocation, activeRide.dropoffCoords);
 
-      let currentDriverLat = baseLat;
-      let currentDriverLon = baseLon;
+      const currentDriverLat = baseLat;
+      const currentDriverLon = baseLon;
       let currentDestLat = baseLat;
       let currentDestLon = baseLon;
-      const startLat = baseLat;
-      const startLon = baseLon;
 
       if (activeRide.status === 'accepted') {
-        currentDriverLat = startLat + (pickup[0] - startLat) * (progress / 100);
-        currentDriverLon = startLon + (pickup[1] - startLon) * (progress / 100);
         currentDestLat = pickup[0];
         currentDestLon = pickup[1];
       } else {
-        currentDriverLat = pickup[0] + (dropoff[0] - pickup[0]) * (progress / 100);
-        currentDriverLon = pickup[1] + (dropoff[1] - pickup[1]) * (progress / 100);
         currentDestLat = dropoff[0];
         currentDestLon = dropoff[1];
       }
@@ -343,13 +299,8 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
 
       // Update/Add polyline path
       const pathCoords: [number, number][] = [];
-      if (activeRide.status === 'accepted') {
-        pathCoords.push([startLat, startLon]);
-        pathCoords.push([pickup[0], pickup[1]]);
-      } else if (activeRide.status === 'pickedup' || activeRide.status === 'arrived') {
-        pathCoords.push([pickup[0], pickup[1]]);
-        pathCoords.push([dropoff[0], dropoff[1]]);
-      }
+      pathCoords.push([baseLat, baseLon]);
+      pathCoords.push([currentDestLat, currentDestLon]);
 
       if (pathCoords.length > 0) {
         if (!polylineRef.current) {
@@ -408,7 +359,7 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
         polylineRef.current = null;
       }
     }
-  }, [activeRide, progress, realCoords, useRealGPS]);
+  }, [activeRide, realCoords, useRealGPS]);
 
   return (
     <div className="flex-1 min-h-[300px] relative overflow-hidden bg-slate-100 flex flex-col" id="real-leaflet-map-wrapper">

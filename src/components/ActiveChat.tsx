@@ -36,22 +36,6 @@ export default function ActiveChat({ activeRide, onSendMessage, onClose }: Activ
     onSendMessage(newMsg);
     setTypedMessage('');
     playChime('click');
-
-    // Simulate Passenger Response after 1.5s
-    setTimeout(() => {
-      const passengerReplies = PRESET_CLIENT_TEXTS;
-      const luckyReply = passengerReplies[Math.floor(Math.random() * passengerReplies.length)];
-      
-      const replyMsg: ChatMessage = {
-        id: "msg-reply-" + Date.now().toString(),
-        sender: 'client',
-        text: luckyReply,
-        time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-      };
-      
-      onSendMessage(replyMsg);
-      playChime('ride-alert'); // Ringer chime for incoming passenger text
-    }, 1500);
   };
 
   const submitForm = (e: React.FormEvent) => {
