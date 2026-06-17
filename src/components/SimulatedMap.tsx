@@ -6,7 +6,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Ride } from '../types';
 import { playChime } from '../data';
-import { Navigation, Compass, AlertCircle, RefreshCw, Layers, Maximize2, Minimize2 } from 'lucide-react';
+import { 
+  Navigation, 
+  Compass, 
+  AlertCircle, 
+  RefreshCw, 
+  Layers, 
+  Maximize2, 
+  Minimize2,
+  CornerUpRight,
+  CornerUpLeft,
+  ArrowUp,
+  CheckCircle2,
+  MapPin,
+  Milestone,
+  Route,
+  Info,
+  ChevronDown,
+  ChevronUp,
+  Waypoints
+} from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -63,6 +82,115 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): 
   return R * c;
 }
 
+interface RouteStep {
+  iconType: 'straight' | 'left' | 'right' | 'dest' | 'highway';
+  instruction: string;
+  distance: string;
+}
+
+function generateRouteGuidance(ride: Ride): RouteStep[] {
+  const pickup = ride.pickupLocation || 'Point A';
+  const dropoff = ride.dropoffLocation || 'Point B';
+  const isEnRouteToPickup = ride.status === 'accepted';
+  
+  if (isEnRouteToPickup) {
+    return [
+      {
+        iconType: 'straight',
+        instruction: "Démarrer sur la route principale de votre secteur actuel",
+        distance: "300 m",
+      },
+      {
+        iconType: 'right',
+        instruction: "Tourner à droite vers la Voie de Dégagement Rapide (VDN) ou l'axe principal",
+        distance: "1.2 km",
+      },
+      {
+        iconType: 'highway',
+        instruction: `Rejoindre l'axe menant vers le point de prise en charge : ${pickup}`,
+        distance: "2.4 km",
+      },
+      {
+        iconType: 'left',
+        instruction: `Tourner à gauche dans la rue d'accès au point de rendez-vous`,
+        distance: "400 m",
+      },
+      {
+        iconType: 'dest',
+        instruction: `Arrivée à destination du client (${pickup}) - Stationner sur une zone sécurisée`,
+        distance: "Arrivé",
+      },
+    ];
+  } else {
+    // Heading to destination Dropoff
+    const isInterCity = dropoff.includes("Thiès") || dropoff.includes("Touba") || dropoff.includes("Tivaouane") || dropoff.includes("Saint-Louis") || dropoff.includes("Mbour") || dropoff.includes("Saly");
+    
+    if (isInterCity) {
+      return [
+        {
+          iconType: 'straight',
+          instruction: `Quitter le point de prise en charge à ${pickup}`,
+          distance: "500 m",
+        },
+        {
+          iconType: 'right',
+          instruction: "S'engager sur la rampe de l'Autoroute de l'Avenir (A1) direction Diamniadio / Régions",
+          distance: "2.8 km",
+        },
+        {
+          iconType: 'highway',
+          instruction: "Passer par le poste de péage et maintenir la vitesse autorisée sur la voie rapide",
+          distance: "45 km",
+        },
+        {
+          iconType: 'straight',
+          instruction: `Poursuivre sur l'axe national N2 / N3 en direction de ${dropoff}`,
+          distance: "18 km",
+        },
+        {
+          iconType: 'left',
+          instruction: `Prendre l'embranchement menant à l'entrée de la ville de ${dropoff}`,
+          distance: "1.5 km",
+        },
+        {
+          iconType: 'dest',
+          instruction: `Arrivée à destination finale de dépose : ${dropoff}`,
+          distance: "Arrivé",
+        },
+      ];
+    } else {
+      // Local/Urban route
+      return [
+        {
+          iconType: 'straight',
+          instruction: `Quitter le point de prise en charge à ${pickup}`,
+          distance: "400 m",
+        },
+        {
+          iconType: 'left',
+          instruction: "Prendre à gauche sur l'Avenue Bourguiba / Boulevard de la République",
+          distance: "1.8 km",
+        },
+        {
+          iconType: 'right',
+          instruction: "Prendre la bretelle d'accès vers la Corniche Ouest",
+          distance: "3.2 km",
+        },
+        {
+          iconType: 'straight',
+          instruction: `Continuer tout droit vers l'adresse de dépose : ${dropoff}`,
+          distance: "1.2 km",
+        },
+        {
+          iconType: 'dest',
+          instruction: `Arrivée au point de dépose finale à ${dropoff}`,
+          distance: "Arrivé",
+        },
+      ];
+    }
+  }
+}
+
 export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscreen, onToggleFullscreen }: SimulatedMapProps) {
   const [trafficAlert, setTrafficAlert] = useState<string | null>(null);
 
@@ -71,11 +199,32 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
   const [useRealGPS, setUseRealGPS] = useState<boolean>(true);
   const [gpsError, setGpsError] = useState<string | null>(null);
   
+  // Interactive Itinerary Guide states
+  const [showItineraryDetail, setShowItineraryDetail] = useState<boolean>(false);
+  const [completedSteps, setCompletedSteps] = useState<Record<string, boolean>>({});
+  
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerDriverRef = useRef<L.Marker | null>(null);
   const markerDestinationRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+
+  // Track manual map interactions to allow zooming without auto-focus interrupting
+  const [mapInteracted, setMapInteracted] = useState<boolean>(false);
+  const hasInteractedRef = useRef<boolean>(false);
+
+  // Reset map interaction status and completed steps when activeRide or GPS mode changes
+  useEffect(() => {
+    hasInteractedRef.current = false;
+    setMapInteracted(false);
+    setCompletedSteps({});
+    // Automatically show details when a ride starts active
+    if (activeRide) {
+      setShowItineraryDetail(true);
+    } else {
+      setShowItineraryDetail(false);
+    }
+  }, [activeRide?.id, activeRide?.status, useRealGPS]);
 
   // Watch current device position to set real position
   useEffect(() => {
@@ -195,6 +344,16 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    // Track user drag and zoom to disable auto-centering
+    map.on('dragstart', () => {
+      hasInteractedRef.current = true;
+      setMapInteracted(true);
+    });
+    map.on('zoomstart', () => {
+      hasInteractedRef.current = true;
+      setMapInteracted(true);
+    });
+
     mapRef.current = map;
 
     return () => {
@@ -204,6 +363,49 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
       }
     };
   }, []);
+
+  // Recenter map action
+  const handleRecenterMap = () => {
+    hasInteractedRef.current = false;
+    setMapInteracted(false);
+    playChime('click');
+
+    const map = mapRef.current;
+    if (!map) return;
+
+    const currentDriverLat = (useRealGPS && realCoords) ? realCoords[0] : 14.7167;
+    const currentDriverLon = (useRealGPS && realCoords) ? realCoords[1] : -17.4479;
+
+    if (activeRide) {
+      const pickup = getRideCoords(activeRide.pickupLocation, activeRide.pickupCoords);
+      const dropoff = getRideCoords(activeRide.dropoffLocation, activeRide.dropoffCoords);
+
+      let currentDestLat = currentDriverLat;
+      let currentDestLon = currentDriverLon;
+
+      if (activeRide.status === 'accepted') {
+        currentDestLat = pickup[0];
+        currentDestLon = pickup[1];
+      } else {
+        currentDestLat = dropoff[0];
+        currentDestLon = dropoff[1];
+      }
+
+      const pathCoords: [number, number][] = [
+        [currentDriverLat, currentDriverLon],
+        [currentDestLat, currentDestLon]
+      ];
+      const bounds = L.latLngBounds(pathCoords);
+      bounds.extend([currentDriverLat, currentDriverLon]);
+      map.fitBounds(bounds, { padding: [35, 35] });
+    } else {
+      if (useRealGPS && realCoords) {
+        map.setView([realCoords[0], realCoords[1]], 14);
+      } else {
+        map.setView([14.7167, -17.4479], 12);
+      }
+    }
+  };
 
   // Update simulator settings on activeRide change
   useEffect(() => {
@@ -324,13 +526,15 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
         }
       }
 
-      // Fit map boundary
-      if (pathCoords.length > 0) {
-        const bounds = L.latLngBounds(pathCoords);
-        bounds.extend([currentDriverLat, currentDriverLon]);
-        map.fitBounds(bounds, { padding: [35, 35] });
-      } else {
-        map.setView([currentDriverLat, currentDriverLon], 13);
+      // Fit map boundary - ONLY if user has not interacted
+      if (!hasInteractedRef.current) {
+        if (pathCoords.length > 0) {
+          const bounds = L.latLngBounds(pathCoords);
+          bounds.extend([currentDriverLat, currentDriverLon]);
+          map.fitBounds(bounds, { padding: [35, 35] });
+        } else {
+          map.setView([currentDriverLat, currentDriverLon], 13);
+        }
       }
 
     } else {
@@ -341,13 +545,17 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
         } else {
           markerDriverRef.current.setLatLng([realCoords[0], realCoords[1]]);
         }
-        map.setView([realCoords[0], realCoords[1]], 14);
+        if (!hasInteractedRef.current) {
+          map.setView([realCoords[0], realCoords[1]], 14);
+        }
       } else {
         if (markerDriverRef.current) {
           markerDriverRef.current.remove();
           markerDriverRef.current = null;
         }
-        map.setView([14.7167, -17.4479], 12);
+        if (!hasInteractedRef.current) {
+          map.setView([14.7167, -17.4479], 12);
+        }
       }
 
       if (markerDestinationRef.current) {
@@ -362,10 +570,154 @@ export default function SimulatedMap({ activeRide, onUpdateRideStatus, isFullscr
   }, [activeRide, realCoords, useRealGPS]);
 
   return (
-    <div className="flex-1 min-h-[300px] relative overflow-hidden bg-slate-100 flex flex-col" id="real-leaflet-map-wrapper">
+    <div className="flex-1 h-full w-full min-h-[300px] relative overflow-hidden bg-slate-100 flex flex-col" id="real-leaflet-map-wrapper">
       
       {/* Real Map element */}
       <div ref={mapContainerRef} className="absolute inset-0 z-10" id="osm-map-panel" style={{ height: '100%', width: '100%' }}></div>
+
+      {/* Recenter button when user has panned or zoomed */}
+      {mapInteracted && (
+        <button
+          type="button"
+          onClick={handleRecenterMap}
+          className="absolute right-3 z-[1000] bg-indigo-950 hover:bg-slate-900 border border-indigo-700 text-white font-bold p-2.5 rounded-full shadow-lg flex items-center gap-1.5 text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-105"
+          style={{ bottom: isFullscreen ? '24px' : (activeRide ? '180px' : '150px') }}
+          title="Recibler la carte sur l'itinéraire"
+          id="btn-recenter-map"
+        >
+          <Compass className="h-4 w-4 text-emerald-400 rotate-45" />
+          <span>Recentrer</span>
+        </button>
+      )}
+
+      {/* Dynamic Itinerary Guide floating toggle button */}
+      {activeRide && (
+        <button
+          type="button"
+          onClick={() => {
+            setShowItineraryDetail(!showItineraryDetail);
+            playChime('click');
+          }}
+          className="absolute right-3 z-[1000] bg-slate-900/95 hover:bg-black border border-indigo-500/50 text-white font-bold p-2.5 rounded-full shadow-xl flex items-center gap-1.5 text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-105"
+          style={{ bottom: isFullscreen ? (mapInteracted ? '74px' : '24px') : (activeRide ? (mapInteracted ? '228px' : '180px') : '150px') }}
+          title="Afficher/masquer le guide d'itinéraire détaillé avec conseils de conduite"
+          id="btn-toggle-itinerary-guide-map"
+        >
+          <Route className="h-4 w-4 text-emerald-400" />
+          <span>{showItineraryDetail ? "Masquer Trajet" : "Guide Trajet"}</span>
+        </button>
+      )}
+
+      {/* Sliding turn-by-turn itinerary guidance panel */}
+      {activeRide && showItineraryDetail && (
+        <div 
+          className="absolute left-3 right-3 bg-white/95 backdrop-blur-md border border-slate-200/80 shadow-2xl rounded-2xl p-3 z-[1000] transition-all overflow-hidden flex flex-col space-y-2 animate-in slide-in-from-bottom duration-300"
+          style={{ 
+            bottom: isFullscreen ? '124px' : '255px',
+            maxHeight: isFullscreen ? 'calc(100% - 240px)' : '210px'
+          }}
+          id="itinerary-guide-overlay"
+        >
+          <div className="flex items-center justify-between border-b pb-1.5 border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <Milestone className="h-4 w-4 text-emerald-600" />
+              <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-widest">
+                Itinéraire & Guide Étape par Étape
+              </h4>
+            </div>
+            <span className="text-[9px] font-bold bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-100">
+              {generateRouteGuidance(activeRide).length} ÉTAPES
+            </span>
+          </div>
+
+          {/* Steps List */}
+          <div className="overflow-y-auto space-y-1.5 pr-1 max-h-[145px] scrollbar-thin text-left">
+            {generateRouteGuidance(activeRide).map((step, idx) => {
+              const isCompleted = !!completedSteps[step.instruction];
+              const stepsList = generateRouteGuidance(activeRide);
+              const firstIncompleteIdx = stepsList.findIndex(s => !completedSteps[s.instruction]);
+              const isNextStep = idx === (firstIncompleteIdx === -1 ? stepsList.length - 1 : firstIncompleteIdx);
+
+              return (
+                <div 
+                  key={idx}
+                  onClick={() => {
+                    setCompletedSteps(prev => ({
+                      ...prev,
+                      [step.instruction]: !prev[step.instruction]
+                    }));
+                    playChime('click');
+                  }}
+                  className={`p-2 rounded-xl border transition-all flex items-start gap-2 cursor-pointer active:scale-98 ${
+                    isCompleted 
+                      ? 'bg-slate-50 border-slate-100 text-slate-400' 
+                      : isNextStep
+                        ? 'bg-emerald-50/70 border-emerald-200 text-slate-800 font-medium scale-[1.01] shadow-xs'
+                        : 'bg-white border-slate-150 text-slate-700 hover:bg-slate-50/50'
+                  }`}
+                >
+                  <button 
+                    type="button"
+                    className={`h-4.5 w-4.5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                      isCompleted 
+                        ? 'bg-[#1D9E75] border-[#1D9E75] text-white' 
+                        : isNextStep
+                          ? 'border-emerald-500 bg-emerald-100 text-emerald-800 animate-pulse'
+                          : 'border-slate-300 bg-slate-50 text-slate-500'
+                    }`}
+                  >
+                    {isCompleted ? (
+                      <CheckCircle2 className="h-3 w-3" />
+                    ) : (
+                      <span className="text-[9px] font-extrabold">{idx + 1}</span>
+                    )}
+                  </button>
+
+                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                    <span className="shrink-0 scale-90">
+                      {step.iconType === 'left' && <CornerUpLeft className="h-3.5 w-3.5 text-indigo-600" />}
+                      {step.iconType === 'right' && <CornerUpRight className="h-3.5 w-3.5 text-indigo-600" />}
+                      {step.iconType === 'highway' && <Waypoints className="h-3.5 w-3.5 text-emerald-600" />}
+                      {step.iconType === 'dest' && <MapPin className="h-3.5 w-3.5 text-rose-500" />}
+                      {step.iconType === 'straight' && <ArrowUp className="h-3.5 w-3.5 text-slate-500" />}
+                    </span>
+                    <p className={`text-[10px] leading-tight ${isCompleted ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+                      {step.instruction}
+                    </p>
+                  </div>
+
+                  <span className={`text-[8.5px] font-mono tracking-wider px-1.5 py-0.5 rounded font-bold shrink-0 self-start ${
+                    isCompleted 
+                      ? 'bg-slate-100 text-slate-400'
+                      : isNextStep
+                        ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                        : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {step.distance}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2 pt-1 border-t border-slate-100 justify-between">
+            <p className="text-[9px] text-slate-400 font-medium flex items-center gap-1">
+              <Info className="h-3 w-3 text-emerald-500 shrink-0" />
+              <span>Cochez les étapes franchies pour simuler votre trajet</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setCompletedSteps({});
+                playChime('click');
+              }}
+              className="text-[9px] font-extrabold text-indigo-700 hover:text-indigo-950 underline px-1 cursor-pointer"
+            >
+              Réinitialiser
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating HUD over Leaflet (utilizes z-[1000] to sit perfectly above Leaflet layers) */}
       <div className="absolute top-3 left-3 right-3 z-[1000] flex flex-col gap-1.5" id="map-top-overlays">

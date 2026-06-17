@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Ride, 
   DriverProfile, 
@@ -20,7 +21,7 @@ import {
   stopRingtoneLoop,
   speakNotification
 } from './data';
-import BookingSimulator from './components/BookingSimulator';
+
 import SimulatedMap from './components/SimulatedMap';
 import WithdrawModal from './components/WithdrawModal';
 import DriverLoginForm from './components/DriverLoginForm';
@@ -74,7 +75,9 @@ import {
   Database,
   Ticket,
   RefreshCw,
-  Download
+  Download,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 const formatScheduleDay = (dayStr: string) => {
@@ -128,6 +131,73 @@ export default function App() {
   const todayEarnings = rideHistory
     .filter(r => r.status === 'completed' && !r.id.startsWith('payout-') && !r.createdTime.includes("Hier"))
     .reduce((sum, r) => sum + r.priceFCFA, 0);
+
+  // Dynamic calculations for weekly earnings representation
+  const getWeeklyEarningsData = () => {
+    const DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+    const todayIndexInDays = (new Date().getDay() + 6) % 7; // Monday = 0, ..., Sunday = 6
+    const dailyEarnings: Record<string, number> = {
+      'Lun': 0, 'Mar': 0, 'Mer': 0, 'Jeu': 0, 'Ven': 0, 'Sam': 0, 'Dim': 0
+    };
+
+    rideHistory.forEach(ride => {
+      if (ride.status !== 'completed' || ride.id.startsWith('payout-')) return;
+      
+      const timeStr = ride.createdTime || '';
+      let dayKey = '';
+
+      if (timeStr.includes("Aujourd'hui") || timeStr.includes("À l'instant")) {
+        dayKey = DAYS[todayIndexInDays];
+      } else if (timeStr.includes("Hier")) {
+        const yesterdayIndex = (todayIndexInDays - 1 + 7) % 7;
+        dayKey = DAYS[yesterdayIndex];
+      } else {
+        const matchedDay = DAYS.find(d => timeStr.toLowerCase().includes(d.toLowerCase()));
+        if (matchedDay) {
+          dayKey = matchedDay;
+        } else {
+          // For legacy rides or seeded history, distribute them stably based on their ID
+          const rideIdStr = String(ride.id);
+          let charCodeSum = 0;
+          for (let i = 0; i < rideIdStr.length; i++) {
+            charCodeSum += rideIdStr.charCodeAt(i);
+          }
+          const stableIndex = charCodeSum % 7;
+          dayKey = DAYS[stableIndex];
+        }
+      }
+
+      if (dayKey && dailyEarnings[dayKey] !== undefined) {
+        dailyEarnings[dayKey] += ride.priceFCFA;
+      }
+    });
+
+    const maxEarning = Math.max(...Object.values(dailyEarnings), 1);
+    const todayDayName = DAYS[todayIndexInDays];
+
+    return DAYS.map(day => {
+      const amount = dailyEarnings[day];
+      // Limit high height range elegantly between 8px and 80px
+      const val = amount === 0 ? 5 : Math.max(8, Math.round(15 + (amount / maxEarning) * 65));
+      const formattedAmount = `${amount.toLocaleString('fr-FR')} FCFA`;
+      
+      let short = '0';
+      if (amount >= 1000) {
+        const kVal = amount / 1000;
+        short = kVal % 1 === 0 ? `${kVal}k` : `${kVal.toFixed(1).replace('.', ',')}k`;
+      } else if (amount > 0) {
+        short = `${amount}`;
+      }
+
+      return {
+        day,
+        val,
+        amount: formattedAmount,
+        short,
+        highlight: day === todayDayName && amount > 0,
+      };
+    });
+  };
   const [scheduledRides, setScheduledRides] = useState<Ride[]>(() => {
     const isCustom = (localStorage.getItem('gainde_vtc_logged_in') === 'true' && 
                      localStorage.getItem('supabase_fallback_userId') && 
@@ -226,6 +296,10 @@ export default function App() {
   const [installStep, setInstallStep] = useState<'idle' | 'downloading' | 'success'>('idle');
   const [installProgress, setInstallProgress] = useState<number>(0);
   const [selectedPlatform, setSelectedPlatform] = useState<'android' | 'ios' | 'desktop'>('android');
+  const [landingActiveTab, setLandingActiveTab] = useState<'site' | 'app'>('site');
+  const [activeFaq, setActiveFaq] = useState<number | null>(null);
+  const [dailyRides, setDailyRides] = useState<number>(8);
+  const [avgFare, setAvgFare] = useState<number>(2500);
 
   useEffect(() => {
     const handleBeforePrompt = (e: any) => {
@@ -671,6 +745,67 @@ export default function App() {
     setRideFilter('incoming');
   };
 
+  const handleGenerateLandingSimulatedRide = () => {
+    if (!isDriverOnline) {
+      // Automatically toggle driver online to allow smooth demo interaction!
+      setIsDriverOnline(true);
+      playChime('success');
+    }
+
+    const firstNames = ["Fatou", "Abdoulaye", "Aminata", "Ibrahima", "Cheikh", "Mariama", "Saliou", "Awa", "Youssou", "Khady"];
+    const lastNames = ["Sow", "Ndiaye", "Diagne", "Gueye", "Fall", "Sy", "Diop", "Cissé", "Ba", "Sarr"];
+    const locations = [
+      { name: "Almadies, Dakar", x: 25, y: 35, region: "urban" },
+      { name: "Plateau, Dakar", x: 35, y: 75, region: "urban" },
+      { name: "Amitié, Dakar", x: 45, y: 55, region: "urban" },
+      { name: "Yoff, Dakar", x: 50, y: 25, region: "urban" },
+      { name: "Parcelles Assainies, Dakar", x: 60, y: 30, region: "urban" },
+      { name: "AIBD Aéroport", x: 80, y: 65, region: "intercity" },
+      { name: "Thiès", x: 85, y: 45, region: "intercity" },
+      { name: "Touba", x: 95, y: 20, region: "intercity" },
+      { name: "Mbour Saly", x: 90, y: 70, region: "intercity" }
+    ];
+
+    const randomClient = firstNames[Math.floor(Math.random() * firstNames.length)] + " " + lastNames[Math.floor(Math.random() * lastNames.length)];
+    const randomPhone = "+221 77 " + Math.floor(100 + Math.random() * 900) + " " + Math.floor(10 + Math.random() * 90) + " " + Math.floor(10 + Math.random() * 90);
+    const avatars = ["🧕", "🧔", "👩", "👨", "👩‍💼", "👨‍💼", "✨", "💫"];
+    const randomAvatar = avatars[Math.floor(Math.random() * avatars.length)];
+    
+    const pickupPick = locations[Math.floor(Math.random() * locations.length)];
+    let dropoffPick = locations[Math.floor(Math.random() * locations.length)];
+    while (dropoffPick.name === pickupPick.name) {
+      dropoffPick = locations[Math.floor(Math.random() * locations.length)];
+    }
+
+    const isIntercity = pickupPick.region === "intercity" || dropoffPick.region === "intercity";
+    const distance = isIntercity ? Math.floor(40 + Math.random() * 150) : Math.floor(3 + Math.random() * 12);
+    const price = isIntercity ? Math.floor(8000 + Math.random() * 15000) : Math.floor(1500 + Math.random() * 3500);
+    const duration = Math.floor(distance * (isIntercity ? 1.2 : 2.5));
+
+    const newRide: Ride = {
+      id: "sim-" + Date.now().toString(),
+      clientName: randomClient,
+      clientPhone: randomPhone,
+      clientAvatar: randomAvatar,
+      clientRating: parseFloat((4.5 + Math.random() * 0.5).toFixed(1)),
+      pickupLocation: pickupPick.name,
+      pickupCoords: { x: pickupPick.x, y: pickupPick.y },
+      dropoffLocation: dropoffPick.name,
+      dropoffCoords: { x: dropoffPick.x, y: dropoffPick.y },
+      priceFCFA: price,
+      distanceKM: distance,
+      durationMinutes: duration,
+      status: 'pending',
+      isScheduled: Math.random() > 0.7,
+      paymentMethod: 'Espèces',
+      trafficIntensity: Math.random() > 0.6 ? 'Saturé' : (Math.random() > 0.5 ? 'Modéré' : 'Fluide'),
+      createdTime: "À l'instant",
+      messages: []
+    };
+
+    handleTriggerRide(newRide);
+  };
+
   // Turn off the ringing
   const handleDeclineRide = (rideId: string) => {
     localStorage.removeItem(`ride_started_${rideId}`);
@@ -858,8 +993,8 @@ export default function App() {
       
       setRideHistory(prev => [finalRide, ...prev]);
       
-      // Credit wallet balance by FCFA price minus a flat platform commission of 200 FCFA
-      const commission = 200;
+      // Credit wallet balance by FCFA price minus a flat platform commission of 50 FCFA
+      const commission = 50;
       const earned = finalRide.priceFCFA - commission;
       
       setProfile(prev => ({
@@ -950,15 +1085,7 @@ export default function App() {
 
   const activeIncomingAlert = pendingRides.length > 0 ? pendingRides[0] : null;
 
-  // Track state changes to trigger ringtone loops cleanly
-  useEffect(() => {
-    if (pendingRides.length === 0) {
-      stopRingtoneLoop();
-      setShownRideAlert(null);
-    }
-  }, [pendingRides]);
-
-  // Audio muting / unmuting switcher
+    // Audio muting / unmuting switcher
   const toggleMute = () => {
     const isNowMuted = !isAudioMuted;
     setIsAudioMuted(isNowMuted);
@@ -970,17 +1097,525 @@ export default function App() {
     playChime('click');
   };
 
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex items-center justify-center p-0 md:p-6" id="galsen-vtc-root">
-      
-      {/* Main dual portal window layout */}
-      <main className="w-full max-w-5xl flex flex-col lg:flex-row items-center justify-center gap-6" id="vtc-dashboard-mesh">
+  const renderLandingPage = () => {
+    const monthlyTurnover = dailyRides * avgFare * 30;
+    const competitorFee = Math.round(monthlyTurnover * 0.15);
+    const demFee = Math.round(dailyRides * 50 * 30);
+    const monthlySavings = Math.max(0, competitorFee - demFee);
+
+    // Calculate percentages for comparison bars (max reference 150,000 FCFA)
+    const competitorPct = Math.min(100, (competitorFee / 150000) * 100);
+    const demPct = Math.min(100, (demFee / 150000) * 100);
+
+    return (
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, ease: "easeOut" }}
+        className="w-full flex flex-col space-y-12 pb-12 text-left" 
+        id="landing-marketing-content"
+      >
         
-        {/* LEFT COLUMN: THE SIMULATED PHONE DEVICE */}
-        <section className="flex flex-col items-center w-full max-w-[390px]">
+        {/* Dynamic Badge & Tagline */}
+        <div className="space-y-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.1 }}
+            className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider"
+          >
+            <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-ping"></span>
+            🇸🇳 TOUT LE SÉNÉGAL · PRENONS LE CONTRÔLE DE NOS GAINS
+          </motion.div>
+          
+          <motion.h1 
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="text-3xl md:text-5xl font-extrabold text-white tracking-tight leading-none"
+          >
+            La liberté de rouler, le <span className="text-[#E2B13C]">respect</span> total de votre travail.
+          </motion.h1>
+          
+          <motion.p 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            className="text-xs md:text-sm text-slate-400 leading-relaxed max-w-xl"
+          >
+            DEM Driver est l’unique plateforme VTC au Sénégal remplaçant les commissions en pourcentage par un forfait unique de <strong className="text-white">50 FCFA</strong>. Remplissez votre portefeuille, pas celui des multinationales.
+          </motion.p>
+        </div>
+
+        {/* Hero Car Visual Card with elegant interactive layout & glow */}
+        <motion.div 
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.7, delay: 0.35 }}
+          className="relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl h-48 md:h-64 group cursor-pointer"
+        >
+          {/* Subtle overlay gradient on top of premium background */}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent z-10"></div>
+          
+          <img 
+            src="/src/assets/images/vtc_premium_dakar_car_1781714865082.jpg"
+            alt="Véhicule de VTC Premium à Dakar"
+            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-103"
+            referrerPolicy="no-referrer"
+          />
+
+          {/* Floating Luxury Badges */}
+          <div className="absolute top-3 left-3 z-20 flex gap-2">
+            <span className="bg-slate-950/85 backdrop-blur-md text-[#E2B13C] px-2.5 py-1 rounded-full text-[9px] uppercase font-bold tracking-widest border border-[#E2B13C]/20 shadow-lg">
+              🇸🇳 Dakar Premium VTC
+            </span>
+            <span className="bg-emerald-500/85 backdrop-blur-md text-white px-2.5 py-1 rounded-full text-[9px] uppercase font-bold tracking-widest border border-emerald-400/20 shadow-lg flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
+              En Service
+            </span>
+          </div>
+
+          <div className="absolute bottom-4 left-4 right-4 z-20 text-left">
+            <p className="text-[9px] font-bold uppercase text-[#E2B13C] tracking-widest leading-none mb-1">Technologie de Pointe & Confort</p>
+            <h3 className="text-sm md:text-base font-bold text-white leading-tight">Roulez sereinement, encaissez l'intégralité de vos courses</h3>
+          </div>
+        </motion.div>
+
+        {/* Call to Actions - Strictly Chauffeur Device Scroll */}
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="flex flex-wrap gap-3"
+        >
+          <motion.button
+            whileHover={{ scale: 1.03, boxShadow: "0 10px 25px -5px rgba(29, 158, 117, 0.4)" }}
+            whileTap={{ scale: 0.98 }}
+            type="button"
+            onClick={() => {
+              setLandingActiveTab('app');
+              playChime('click');
+              const phoneEle = document.getElementById('driver-phone-device');
+              if (phoneEle) {
+                phoneEle.scrollIntoView({ behavior: 'smooth' });
+              }
+            }}
+            className="bg-[#1D9E75] hover:bg-[#1A8763] text-white font-extrabold text-xs uppercase tracking-wider py-4.5 px-7 rounded-2xl flex items-center gap-2.5 transition-all cursor-pointer shadow-lg"
+          >
+            <Smartphone className="h-4.5 w-4.5 animate-pulse" />
+            <span>Démarrer l'application Chauffeur</span>
+          </motion.button>
+
+          <a
+            href="#gain-calculator"
+            className="bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-850 hover:border-slate-800 font-extrabold text-xs uppercase tracking-wider py-4.5 px-7 rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-md"
+          >
+            <TrendingUp className="h-4 w-4 text-[#E2B13C]" />
+            <span>Calculer mes économies</span>
+          </a>
+        </motion.div>
+
+        {/* Covered territories flag belt */}
+        <div className="flex items-center gap-2 flex-wrap text-slate-450 text-[10px] font-extrabold uppercase tracking-widest border-y border-slate-900 py-4.5">
+          <span className="text-slate-500 mr-1.5">AXES URBAINS & NATIONAUX COUVERTS :</span>
+          {["Dakar", "Thiès", "Touba", "Mbour / Saly", "Saint-Louis", "AIBD"].map((city, idx) => (
+            <motion.span 
+              key={idx}
+              whileHover={{ scale: 1.05, y: -1 }}
+              className="bg-slate-900 border border-slate-800/85 rounded-lg px-3 py-1.5 text-slate-200 flex items-center gap-1 cursor-default font-semibold text-[9px]"
+            >
+              🇸🇳 {city.toUpperCase()}
+            </motion.span>
+          ))}
+        </div>
+
+        {/* INTERACTIVE ANIMATED EARNINGS CALCULATOR */}
+        <motion.div 
+          id="gain-calculator"
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="bg-radial from-slate-950 to-slate-900/90 border border-slate-800/80 p-6 md:p-8 rounded-3xl space-y-6 relative overflow-hidden shadow-2xl"
+        >
+          <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+          <div className="absolute bottom-0 left-0 w-48 h-48 bg-amber-500/5 rounded-full blur-3xl pointer-events-none"></div>
+
+          <div className="space-y-1.5 pb-2 border-b border-slate-800/40">
+            <span className="text-[10px] font-black uppercase text-[#E2B13C] tracking-widest flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#E2B13C]"></span>
+              Outil interactif
+            </span>
+            <h3 className="text-lg font-extrabold text-white">Simulateur de Gains Mensuels Chauffeur</h3>
+            <p className="text-[11px] text-slate-400">
+              Déplacez les curseurs ci-dessous pour comparer les frais de service prélevés sur vos revenus réels.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+            {/* Slider 1: Daily rides */}
+            <div className="space-y-3 bg-slate-900/35 border border-slate-800/40 p-4 rounded-2xl">
+              <div className="flex justify-between items-center">
+                <label className="text-[11px] font-bold text-slate-300">Courses complétées / jour</label>
+                <span className="text-sm font-black text-emerald-400 font-mono">{dailyRides} courses</span>
+              </div>
+              <input 
+                type="range"
+                min="1"
+                max="20"
+                value={dailyRides}
+                onChange={(e) => {
+                  setDailyRides(parseInt(e.target.value));
+                  if (Math.random() > 0.6) playChime('click');
+                }}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+              <div className="flex justify-between text-[9px] text-slate-500">
+                <span>1 course</span>
+                <span>10 courses</span>
+                <span>20 courses</span>
+              </div>
+            </div>
+
+            {/* Slider 2: Average ride fare */}
+            <div className="space-y-3 bg-slate-900/35 border border-slate-800/40 p-4 rounded-2xl">
+              <div className="flex justify-between items-center">
+                <label className="text-[11px] font-bold text-slate-300">Prix moyen d'un trajet (FCFA)</label>
+                <span className="text-sm font-black text-emerald-400 font-mono">{avgFare.toLocaleString('fr-FR')} FCFA</span>
+              </div>
+              <input 
+                type="range"
+                min="1000"
+                max="10000"
+                step="500"
+                value={avgFare}
+                onChange={(e) => {
+                  setAvgFare(parseInt(e.target.value));
+                  if (Math.random() > 0.6) playChime('click');
+                }}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+              <div className="flex justify-between text-[9px] text-slate-500">
+                <span>1 000 F</span>
+                <span>5 050 F</span>
+                <span>10 000 F</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Results Analysis */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+            
+            <div className="bg-slate-950 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between space-y-1">
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Chiffre d'Affaires Mensuel</span>
+              <p className="text-lg font-black text-white font-mono tracking-tight">{monthlyTurnover.toLocaleString('fr-FR')} FCFA</p>
+              <div className="text-[9px] text-slate-500">Totalité de vos courses brutes</div>
+            </div>
+
+            <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 p-4 rounded-2xl flex flex-col justify-between space-y-1">
+              <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider">Commission Concurrents (15%)</span>
+              <p className="text-lg font-black text-red-400 font-mono tracking-tight">-{competitorFee.toLocaleString('fr-FR')} FCFA</p>
+              <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden mt-1">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${competitorPct}%` }}
+                  transition={{ type: "spring", stiffness: 80 }}
+                  className="bg-red-500 h-full"
+                ></motion.div>
+              </div>
+            </div>
+
+            <div className="bg-emerald-500/5 border border-emerald-500/20 p-4 rounded-2xl flex flex-col justify-between space-y-1">
+              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">Frais DEM Chauffeur (50F flat)</span>
+              <p className="text-lg font-black text-emerald-400 font-mono tracking-tight">-{demFee.toLocaleString('fr-FR')} FCFA</p>
+              <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden mt-1">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${demPct}%` }}
+                  transition={{ type: "spring", stiffness: 80 }}
+                  className="bg-emerald-500 h-full"
+                ></motion.div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Savings Highlight Badge / Panel */}
+          <motion.div 
+            key={monthlySavings}
+            initial={{ scale: 0.97, opacity: 0.9 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: "spring", damping: 12 }}
+            className="bg-emerald-950/40 border border-emerald-500/25 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-emerald-500/20 flex items-center justify-center font-bold text-emerald-400">
+                💰
+              </div>
+              <div className="text-left">
+                <p className="text-xs font-black text-white uppercase tracking-wide">ÉCONOMIE NETTE DANS VOTRE POCHE</p>
+                <p className="text-[10.5px] text-emerald-255 opacity-75">Argent conservé en évitant les pourcentages mensuels.</p>
+              </div>
+            </div>
+            <div className="text-center sm:text-right">
+              <span className="text-xl md:text-2xl font-black text-[#E2B13C] font-mono tracking-tight block">
+                +{monthlySavings.toLocaleString('fr-FR')} FCFA <span className="text-xs font-bold text-emerald-400">/ mois</span>
+              </span>
+            </div>
+          </motion.div>
+
+        </motion.div>
+
+        {/* ROAD DISPATCH ANIMATED TRAVEL DEMO (Galsen Route Pulse Tracker) */}
+        <div className="space-y-4">
+          <h2 className="text-xs font-black text-slate-350 uppercase tracking-widest flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-[#1D9E75] animate-ping"></span>
+            Simulation de Transit National Sénégalais
+          </h2>
+          <div className="bg-slate-900/35 border border-slate-800/60 rounded-2xl p-4 md:p-6 overflow-hidden relative">
+            
+            {/* SVG Path animation line representing high-speed interstate axes */}
+            <div className="space-y-6 relative">
+              <div className="flex justify-between text-[11px] font-bold text-slate-300 relative z-10 px-2">
+                <div className="flex flex-col items-start">
+                  <span className="text-slate-400 text-[9px] font-normal uppercase">Départ</span>
+                  <span className="text-[#E2B13C]">🇸🇳 DAKAR (AIBD)</span>
+                </div>
+                <div className="flex flex-col items-center text-center">
+                  <span className="text-slate-400 text-[9px] font-normal uppercase">Escale auto</span>
+                  <span className="text-indigo-400">THIÈS ACCÈS</span>
+                </div>
+                <div className="flex flex-col items-end text-right">
+                  <span className="text-slate-400 text-[9px] font-normal uppercase">Arrivée d'Axe</span>
+                  <span className="text-[#1D9E75]">TOUBA MOSQUÉE</span>
+                </div>
+              </div>
+
+              {/* Progress Line Tracker */}
+              <div className="h-2 bg-slate-950 border border-slate-800/80 rounded-full relative overflow-visible">
+                {/* Horizontal dotted tracer line */}
+                <div className="absolute inset-y-0 left-0 right-0 border-t-2 border-dashed border-slate-850 top-1/2 -translate-y-1/2"></div>
+                
+                {/* Visual glow bar animating */}
+                <div className="absolute inset-y-0 bg-emerald-500/20 left-0 w-3/4 rounded-full"></div>
+
+                {/* Gliding taxi capsule */}
+                <motion.div 
+                  animate={{ 
+                    left: ["5%", "95%", "5%"],
+                  }}
+                  transition={{ 
+                    duration: 18, 
+                    repeat: Infinity, 
+                    ease: "easeInOut" 
+                  }}
+                  className="absolute -top-[11px] h-7 w-12 bg-slate-900 border-2 border-[#E2B13C] rounded-full shadow-lg flex items-center justify-center -ml-6"
+                >
+                  <span className="text-xs select-none animate-pulse">🚕</span>
+                </motion.div>
+              </div>
+
+              <div className="flex justify-between items-center text-[10px] text-slate-500 px-1 pt-1">
+                <span>Péage Autoroute de l'Avenir</span>
+                <span className="font-mono bg-slate-950 border border-slate-850 px-2 py-0.5 rounded text-[#E2B13C]">Tarification Flat 100 FCFA</span>
+                <span>Axe National 2</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* Bento stats & benefits grid with Motion Animations */}
+        <div className="space-y-4">
+          <h2 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            Pourquoi choisir DEM Driver ?
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            
+            {/* Card 1 */}
+            <motion.div 
+              whileHover={{ scale: 1.025, y: -4, borderColor: "rgba(226, 177, 60, 0.4)" }}
+              transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              className="bg-slate-900/40 border border-slate-800/60 p-4.5 rounded-2xl space-y-2 hover:bg-slate-900/65 cursor-pointer text-left"
+            >
+              <div className="flex items-center gap-2 text-[#E2B13C]">
+                <div className="p-2 bg-[#E2B13C]/10 rounded-xl">
+                  <DollarSign className="h-4 w-4" />
+                </div>
+                <h3 className="text-[11px] font-black uppercase tracking-wider">Commission Forfaitaire Fixe</h3>
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                Gardez 100% du prix des trajets de vos passagers. Nous prélevons uniquement un forfait fixe symbolique de <span className="text-white font-bold font-mono">50 FCFA</span> par course complétée. Pas de pourcentages cachés.
+              </p>
+            </motion.div>
+
+            {/* Card 2 */}
+            <motion.div 
+              whileHover={{ scale: 1.025, y: -4, borderColor: "rgba(129, 140, 248, 0.4)" }}
+              transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              className="bg-slate-900/40 border border-slate-800/60 p-4.5 rounded-2xl space-y-2 hover:bg-slate-900/65 cursor-pointer text-left"
+            >
+              <div className="flex items-center gap-2 text-indigo-400">
+                <div className="p-2 bg-indigo-400/10 rounded-xl">
+                  <Compass className="h-4 w-4" />
+                </div>
+                <h3 className="text-[11px] font-black uppercase tracking-wider">Guidage GPS Leaflet Précis</h3>
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                Suivez votre itinéraire en direct sur notre carte interactive Leaflet. Disposez d'un guide étape par étape pour guider vos trajets urbains ou d'axe national au Sénégal.
+              </p>
+            </motion.div>
+
+            {/* Card 3 */}
+            <motion.div 
+              whileHover={{ scale: 1.025, y: -4, borderColor: "rgba(52, 211, 153, 0.4)" }}
+              transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              className="bg-slate-900/40 border border-slate-800/60 p-4.5 rounded-2xl space-y-2 hover:bg-slate-900/65 cursor-pointer text-left"
+            >
+              <div className="flex items-center gap-2 text-emerald-400">
+                <div className="p-2 bg-emerald-400/10 rounded-xl">
+                  <CreditCard className="h-4 w-4" />
+                </div>
+                <h3 className="text-[11px] font-black uppercase tracking-wider">Retraits Libres Instantanés</h3>
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                Votre solde accumulé est entièrement disponible 24h/24. Initiez des retraits à tout moment vers Wave, Orange Money ou récupérez vos espèces à un guichet physique.
+              </p>
+            </motion.div>
+
+            {/* Card 4 */}
+            <motion.div 
+              whileHover={{ scale: 1.025, y: -4, borderColor: "rgba(251, 191, 36, 0.4)" }}
+              transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              className="bg-slate-900/40 border border-slate-800/60 p-4.5 rounded-2xl space-y-2 hover:bg-slate-900/65 cursor-pointer text-left"
+            >
+              <div className="flex items-center gap-2 text-amber-400">
+                <div className="p-2 bg-amber-400/10 rounded-xl">
+                  <Bell className="h-4 w-4 text-amber-400" />
+                </div>
+                <h3 className="text-[11px] font-black uppercase tracking-wider">Alertes avec Synthèse Vocale</h3>
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                L'application intègre des alertes sonores de haute qualité avec synthèse vocale automatique qui vous dicte à voix haute le trajet du client pour anticiper sa prise en charge.
+              </p>
+            </motion.div>
+
+          </div>
+        </div>
+
+        {/* Chauffeur Account Setup Guide with motion */}
+        <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl space-y-4 text-left">
+          <h2 className="text-sm font-extrabold text-white uppercase tracking-wider flex items-center gap-2">
+            <Car className="h-5 w-5 text-emerald-400 animate-bounce" />
+            Guide Rapide : Démarrez vos courses
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[11px]">
+            <div className="space-y-1">
+              <h4 className="font-extrabold text-slate-200">1. S'inscrire / Connexion</h4>
+              <p className="text-slate-400 text-[10.5px]">
+                Ouvrez un compte en fournissant vos informations de véhicule (modèle de voiture, plaque, places).
+              </p>
+            </div>
+            <div className="space-y-2 border-l-0 md:border-l border-slate-800 md:pl-4">
+              <h4 className="font-extrabold text-[#E2B13C]">2. Passer En Ligne</h4>
+              <p className="text-slate-400 text-[10.5px]">
+                Activez l'interrupteur 'En ligne' sur le téléphone. Vous êtes prêt à recevoir les demandes à proximité.
+              </p>
+            </div>
+            <div className="space-y-1 border-l-0 md:border-l border-slate-800 md:pl-4">
+              <h4 className="font-extrabold text-emerald-400">3. Encaisser l'argent</h4>
+              <p className="text-slate-400 text-[10.5px]">
+                Complétez les trajets pour accumuler vos revenus, payez seulement 100 FCFA de commission !
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* FAQ Section with Animated Accordions */}
+        <div className="space-y-4 text-left" id="landing-faq">
+          <h2 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">
+            Questions Fréquentes (FAQ Chauffeur)
+          </h2>
+          <div className="space-y-2.5">
+            {[
+              {
+                q: "Quelle est la commission sur DEM driver ?",
+                a: "Nous prélevons uniquement un forfait fixe exceptionnel de 50 FCFA par course complétée. Tout le reste est directement crédité dans votre portefeuille chauffeur. Contrairement aux autres applications VTC, nous ne prélevons aucun pourcentage sur vos gains de trajets !"
+              },
+              {
+                q: "Quelles sont les villes et axes routiers officiellement couverts ?",
+                a: "L'application gère de façon fluide tous les axes urbains de Dakar, ainsi que les principaux trajets inter-villes nationaux vers Thiès, Touba, Tivaouane, Mbour, Saly, Saint-Louis et l'Aéroport International Blaise Diagne (AIBD)."
+              },
+              {
+                q: "Comment fonctionnent les retraits de gains ?",
+                a: "Vous pouvez initier à tout moment votre opération de retrait directement dans l'onglet 'Revenus'. Saisissez votre compte bancaire, numéro Wave ou Orange Money, ou rendez-vous à l'un de nos guichets partenaires physiques au Sénégal pour un retrait cash immédiat."
+              },
+              {
+                q: "Le guidage GPS et l'itinéraire d'aide sont-ils inclus ?",
+                a: "Oui ! L'application intègre un module de guidage d'itinéraire étape par étape. Chaque fois qu'une course est acceptée, vous disposez d'un panneau d'instructions de virage en direct que vous pouvez cocher pour suivre le cap au Sénégal."
+              }
+            ].map((faq, idx) => {
+              const isOpen = activeFaq === idx;
+              return (
+                <div key={idx} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveFaq(isOpen ? null : idx);
+                      playChime('click');
+                    }}
+                    className="w-full text-left p-4.5 flex items-center justify-between font-extrabold text-[11px] select-none hover:bg-slate-800/40 text-slate-200 transition-colors"
+                  >
+                    <span>{faq.q}</span>
+                    <span>
+                      {isOpen ? <ChevronUp className="h-4 w-4 text-[#E2B13C]" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                    </span>
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {isOpen && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.25, ease: "easeInOut" }}
+                        className="overflow-hidden"
+                      >
+                        <div className="p-4.5 pt-1 text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/50 bg-slate-950/30">
+                          {faq.a}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Landing footer */}
+        <div className="pt-6 border-t border-slate-850 text-[10px] text-slate-550 font-medium flex flex-col sm:flex-row items-center justify-between gap-4">
+          <span>Copyright © 2026 DEM Driver Sénégal - Plateforme VTC premium</span>
+          <div className="flex gap-4">
+            <span className="text-[#E2B13C] uppercase tracking-wider font-bold">100 FCFA FORFAIT UNIQUE</span>
+            <span className="text-emerald-400">SÉNÉGAL 🇸🇳</span>
+          </div>
+        </div>
+
+      </motion.div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col items-center justify-center w-full relative p-0 md:p-6" id="galsen-vtc-root">
+      
+      {/* Main centered single phone layout without landing page */}
+      <main className="w-full max-w-md flex flex-col items-center justify-center relative" id="vtc-dashboard-mesh">
+        
+        {/* THE SIMULATED PHONE DEVICE */}
+        <section className="w-full shrink-0 flex flex-col items-center justify-center" id="smartphone-wrapper-panel">
           
           {/* Main phone body: border-0 on mobile for real PWA feel, bordered on desktop */}
-          <div className="w-full max-w-[390px] min-h-[100dvh] md:min-h-[740px] md:max-h-[844px] bg-slate-950 md:rounded-[48px] border-0 md:border-[10px] border-slate-800 shadow-2xl relative overflow-hidden flex flex-col text-slate-900" id="driver-phone-device">
+          <div className="w-full max-w-[390px] h-[100dvh] md:h-[780px] md:max-h-[844px] bg-slate-950 md:rounded-[48px] border-0 md:border-[10px] border-slate-800 shadow-2xl relative overflow-hidden flex flex-col text-slate-900 mx-auto" id="driver-phone-device">
             
             {/* Phone notch & dynamic island indicator (only visible on desktop wrapper) */}
             <div className="absolute top-0 inset-x-0 h-4 bg-slate-950 hidden md:flex justify-center z-50">
@@ -1153,7 +1788,7 @@ export default function App() {
             )}
 
             {/* SCREEN PORTAL VIEW BODY CELL */}
-            <div className="flex-1 bg-slate-50 overflow-y-auto flex flex-col" id="device-screen-core">
+            <div className={`flex-1 bg-slate-50 flex flex-col ${(isMapFullscreen && activeTab === 'map') ? 'overflow-hidden h-full' : 'overflow-y-auto'}`} id="device-screen-core">
               
               {/* Conditional Screen tabs renderer */}
 
@@ -1188,7 +1823,7 @@ export default function App() {
                       }`}
                       id="subtab-history-rides"
                     >
-                      Livrées ({rideHistory.length})
+                      Terminées ({rideHistory.length})
                     </button>
                   </div>
 
@@ -1219,9 +1854,7 @@ export default function App() {
                           <p className="text-[11px] text-slate-500 leading-relaxed">
                             Les réservations inter-villes (Dakar, Thiès, Tivaouane, Touba) apparaitront ici en temps réel dès que l'un des clients placera une commande.
                           </p>
-                          <div className="bg-indigo-50/50 p-2.5 rounded-2xl border border-indigo-100 text-[10px] text-indigo-700 font-medium">
-                            💡 Utilisez le <strong>Simulateur Client</strong> à droite pour lancer une réservation de test !
-                          </div>
+
                         </div>
                       ) : (
                         pendingRides.map((ride) => {
@@ -1380,12 +2013,12 @@ export default function App() {
                               onChange={(e) => setNewSchedRoute(e.target.value)}
                               className="w-full text-xs p-1.5 rounded-lg bg-indigo-950 border border-indigo-700 font-semibold focus:outline-amber-500 text-indigo-100"
                             >
-                              <option value="Dakar ➔ Tivaouane" className="bg-indigo-950 text-white">Dakar ➔ Tivaouane 🕌</option>
-                              <option value="Tivaouane ➔ Dakar" className="bg-indigo-950 text-white">Tivaouane ➔ Dakar 🏙️</option>
-                              <option value="Thiès ➔ Dakar" className="bg-indigo-950 text-white">Thiès ➔ Dakar 🏙️</option>
-                              <option value="Dakar ➔ Thiès" className="bg-indigo-950 text-white">Dakar ➔ Thiès 🥜</option>
-                              <option value="Dakar ➔ Touba" className="bg-indigo-950 text-white">Dakar ➔ Touba 🕋</option>
-                              <option value="Touba ➔ Thiès" className="bg-indigo-950 text-white">Touba ➔ Thiès 🕌</option>
+                              <option value="Dakar ➔ Tivaouane" className="bg-indigo-950 text-white">Dakar ➔ Tivaouane</option>
+                              <option value="Tivaouane ➔ Dakar" className="bg-indigo-950 text-white">Tivaouane ➔ Dakar</option>
+                              <option value="Thiès ➔ Dakar" className="bg-indigo-950 text-white">Thiès ➔ Dakar</option>
+                              <option value="Dakar ➔ Thiès" className="bg-indigo-950 text-white">Dakar ➔ Thiès</option>
+                              <option value="Dakar ➔ Touba" className="bg-indigo-950 text-white">Dakar ➔ Touba</option>
+                              <option value="Touba ➔ Thiès" className="bg-indigo-950 text-white">Touba ➔ Thiès</option>
                             </select>
                           </div>
 
@@ -1568,7 +2201,7 @@ export default function App() {
 
               {/* TAB 2: SIMULATED CARTE WITH INTERACTIVE TRAVEL COMPONENT */}
               {activeTab === 'map' && (
-                <div className="flex-1 flex flex-col animate-in fade-in duration-200" id="screen-map-tab">
+                <div className={`flex-1 flex flex-col animate-in fade-in duration-200 ${isMapFullscreen ? 'h-full' : ''}`} id="screen-map-tab">
                   
                   {/* Public transport banner indicator */}
                   {!isMapFullscreen && (
@@ -1584,7 +2217,7 @@ export default function App() {
                   )}
 
                   {/* Wrapper for the map with stable heights */}
-                  <div className={`${isMapFullscreen ? 'flex-1' : 'h-[270px]'} shrink-0 relative border-b border-slate-200 transition-all duration-300`}>
+                  <div className={`${isMapFullscreen ? 'flex-1 h-full flex flex-col' : 'h-[270px]'} shrink-0 relative border-b border-slate-200 transition-all duration-300`}>
                     <SimulatedMap 
                       activeRide={activeRide}
                       onUpdateRideStatus={handleUpdateRideStatus}
@@ -1833,38 +2466,61 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Wave Pay Commission CTA Box - Fast secure payment of commissions */}
+                  <div className="bg-gradient-to-br from-[#1cb0f6]/15 to-[#1cb0f6]/5 border border-[#1cb0f6]/30 rounded-3xl p-4 flex flex-col gap-2.5 shadow-xs" id="wave-commission-box">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 rounded-full h-2 bg-[#1cb0f6] animate-pulse"></div>
+                        <h4 className="text-[10px] font-extrabold text-black uppercase tracking-widest">Payer ma commission</h4>
+                      </div>
+                    </div>
+
+                    <p className="text-black text-[11px] text-left leading-relaxed font-medium">
+                      Réglez votre commission obligatoire de <strong className="text-emerald-700 font-extrabold">200 FCFA</strong> en ligne de manière simple, rapide et entièrement sécurisée.
+                    </p>
+
+                    <a 
+                      href="https://pay.wave.com/m/M_sn_UMIt2X6-_-5B/c/sn/?amount=200"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => playChime('click')}
+                      className="w-full bg-[#1cb0f6] hover:bg-[#199edb] active:scale-[0.98] text-slate-950 font-black text-[11px] uppercase tracking-wider py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md text-center"
+                    >
+                      🌊 Payer via Wave (200 FCFA)
+                    </a>
+                  </div>
+
                   {/* Revenue Chart mock drawing using styled grid bar components */}
                   <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
                       <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">REVENUS CETTE SEMAINE</h4>
-                      <span className="text-emerald-600 text-xs font-bold flex items-center gap-1">
-                        <TrendingUp className="h-3.5 w-3.5" /> +14% hausse
-                      </span>
                     </div>
 
                     {/* Styled HTML chart representing 7 days */}
                     <div className="h-28 flex items-end gap-3 px-2 border-b border-dashed border-slate-100 pb-1" id="custom-analytics-chart">
-                      {[
-                        { day: 'Lun', val: '40', amount: '12 000 FCFA' },
-                        { day: 'Mar', val: '65', amount: '18 500 FCFA' },
-                        { day: 'Mer', val: '50', amount: '14 000 FCFA' },
-                        { day: 'Jeu', val: '75', amount: '22 000 FCFA' },
-                        { day: 'Ven', val: '95', amount: '35 000 FCFA', highlight: true },
-                        { day: 'Sam', val: '80', amount: '29 000 FCFA' },
-                        { day: 'Dim', val: '30', amount: '9 000 FCFA' }
-                      ].map((bar, idx) => (
-                        <div key={idx} className="flex-1 flex flex-col items-center gap-1 group relative cursor-pointer">
-                          {/* Tooltip trigger */}
-                          <span className="absolute -top-7 scale-0 group-hover:scale-100 transition-transform bg-slate-900 text-white text-[8px] p-1 rounded font-bold whitespace-nowrap z-40">
+                      {getWeeklyEarningsData().map((bar, idx) => (
+                        <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full relative cursor-pointer group">
+                          {/* Tooltip trigger for absolute precision on hover/tap */}
+                          <span className="absolute -top-7 scale-0 group-hover:scale-100 transition-transform bg-slate-900 border border-slate-800 text-white text-[8px] p-1 rounded font-bold whitespace-nowrap z-40 shadow-xl">
                             {bar.amount}
                           </span>
+                          
+                          {/* Daily earnings short label - always visible, ideal for mobile devices */}
+                          <span className={`text-[8px] font-extrabold tracking-tighter mb-1 transition-all duration-300 ${
+                            bar.highlight ? 'text-indigo-950 font-black' : 'text-slate-500 group-hover:text-slate-800'
+                          }`}>
+                            {bar.short}
+                          </span>
+                          
                           <div 
-                            className={`w-full rounded-t-md transition-all duration-500 ${
-                              bar.highlight ? 'bg-indigo-900' : 'bg-slate-300 group-hover:bg-indigo-400'
+                            className={`w-full rounded-t-md transition-all duration-500 shadow-sm ${
+                              bar.highlight 
+                                ? 'bg-gradient-to-t from-indigo-950 to-indigo-800' 
+                                : 'bg-slate-300 group-hover:bg-indigo-400'
                             }`}
                             style={{ height: `${bar.val}px` }}
                           ></div>
-                          <span className="text-[10px] font-semibold text-slate-500 mt-1">{bar.day}</span>
+                          <span className="text-[9px] font-bold text-slate-400 mt-1.5 uppercase tracking-wider">{bar.day}</span>
                         </div>
                       ))}
                     </div>
@@ -1880,7 +2536,7 @@ export default function App() {
                           <p className="font-bold text-slate-700">Commission DEM driver (Flat)</p>
                           <p className="text-[9px] text-slate-400">Automatique à chaque course complétée</p>
                         </div>
-                        <span className="text-red-500 font-mono font-bold">-200 FCFA</span>
+                        <span className="text-red-500 font-mono font-bold">-50 FCFA</span>
                       </div>
                       
                       <div className="border-t border-slate-100 pt-2.5 flex justify-between items-center text-xs">
@@ -2270,16 +2926,7 @@ export default function App() {
 
         </section>
 
-        {/* RIGHT COLUMN: BOOKING CONTROLLER FOR DESKTOP TESTS */}
-        <section className="hidden lg:block w-full max-w-[390px] space-y-6">
-          
-          {/* Booking Simulator Component */}
-          <BookingSimulator 
-            onTriggerRide={handleTriggerRide}
-            activeRideCount={pendingRides.length + activeRides.length}
-          />
 
-        </section>
 
       </main>
 
